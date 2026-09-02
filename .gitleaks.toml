@@ -12,15 +12,27 @@ title = "site"
 [extend]
 useDefault = true
 
-# generic-api-key fires on the *source text* `api_key, subject=acting` in the
-# tenancy tests: both are Python identifiers, and `api_key` there is a key the
-# test itself just created through the API. Allowlisting the file wholesale
-# would silently cover a real credential added to it later, so this is scoped to
-# the exact rule, the exact file, and the exact matched string, all three at once.
+# generic-api-key fires on the *source text* of a Python keyword argument --
+# `subject=acting`, `subject=SUBJECT` -- in two test modules. Both sides are
+# identifiers: the value is a variable the test itself just created through the
+# API, never a literal.
+#
+# All three conditions are exact on purpose. Allowlisting the files wholesale
+# would silently cover a real credential added to them later, and allowlisting
+# `subject=<any identifier>` would also cover `subject=sk_live_...`, which is a
+# perfectly good identifier. Spelling out the two names means a third one fails
+# the scan and someone looks at it.
+#
+# The earlier version of this block never applied: it anchored the path as
+# `^test_tenancy\.py$` while gitleaks reports `tests/test_tenancy.py`, and under
+# condition = "AND" one unmatched clause disables the whole entry. It was
+# written, committed, and inert -- the scan it was meant to quiet had been
+# failing ever since, and the three findings in test_mcp_http.py were never
+# covered at all.
 [[allowlists]]
-description = "Python keyword arguments in test_tenancy.py, not credential values"
+description = "Python keyword arguments in tests, not credential values"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^test_tenancy\.py$''']
+paths = ['''^tests/test_(tenancy|mcp_http)\.py$''']
 regexTarget = "secret"
-regexes = ['''^subject=acting$''']
+regexes = ['''^subject=(acting|SUBJECT)$''']
