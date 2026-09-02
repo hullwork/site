@@ -46,6 +46,46 @@ not a claim.
   `a-ub` + tenant `c` and merchant `a` + tenant `b-uc` would collide onto one Namespace, and
   the Namespace *is* the isolation boundary.
 
+```text
+ ┌─ an agent asks for a deployment ────────────────────────────────────────┐
+ │  MCP tools          `sites` CLI          HTTP API          console      │
+ └────────────────────────────────┬────────────────────────────────────────┘
+                                  │  merchant API key
+                                  │  the tenant is decided by the credential;
+                                  │  a caller-declared identity is refused
+ ┌────────────────────────────────▼────────────────────────────────────────┐
+ │  sites-api      admission · quotas · tenancy                            │
+ │    │            one replica: the admission lock is in-process           │
+ │    └── control metadata ──► PostgreSQL                                  │
+ └────────────────────────────────┬────────────────────────────────────────┘
+                                  │  writes desired state
+ ┌────────────────────────────────▼────────────────────────────────────────┐
+ │  SiteDeployment  ·  SiteBuild        Kubernetes custom resources        │
+ └────────────────────────────────┬────────────────────────────────────────┘
+                                  │  reconciled by
+ ┌────────────────────────────────▼────────────────────────────────────────┐
+ │  sites-operator     one replica: no leader election                     │
+ │    ├── build plane ──► image from a source tree, or an image you name   │
+ │    ├── workload ─────► Deployment · Service · Ingress                    │
+ │    └── once ready ───► fetches the real address over HTTP and records   │
+ │                        the status code and the SHA-256 of the body in   │
+ │                        status.verification                              │
+ │                        "deployed" is a measurement, not a claim         │
+ └─────────────────────────────────────────────────────────────────────────┘
+
+ serving a request, including the first one after idle
+ ┌─────────────────────────────────────────────────────────────────────────┐
+ │  traffic ──► gateway ──► sites-activator ──► workload                   │
+ │                            │                                            │
+ │                            └── scaled to zero? hold the request, scale  │
+ │                                up, then forward it — the caller waits,  │
+ │                                it does not see an error                 │
+ └─────────────────────────────────────────────────────────────────────────┘
+
+ Not owned here: cluster provisioning, custom domains, public ingress,
+ billing, organizational RBAC.
+```
+
 ## Quickstart
 
 ### Build and test it (no Kubernetes cluster needed)
@@ -58,7 +98,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1008 tests
+make test        # 1009 tests
 make test-db-down
 ```
 
@@ -121,22 +161,9 @@ response runs bounded source, deployment, and shared-schema policy checks and re
 One codebase and one image (`sites-control`), split by entry point into three resident
 processes plus a build plane:
 
-```text
-        CLI / MCP / console
-                 │
-                 ▼
-            sites-api ──── PostgreSQL (control metadata)
-                 │
-                 ▼
-   SiteDeployment / SiteBuild custom resources
-                 │
-                 ▼
-          sites-operator ──── Kubernetes workloads
-                 │
-                 └──► verification evidence ──► status.verification
+The diagram above the quick start shows the layout; this section is the
+detail behind it.
 
-   traffic ──► gateway or NodePort ──► sites-activator ──► workload
-```
 
 | Role | Entry point | Responsibility |
 |---|---|---|
@@ -195,105 +222,13 @@ Changing the domain core's public surface is a repository-wide change.
 
 ## Identity and multi-tenancy
 
-One control plane can serve mutually untrusted tenants. Identity has two parts: a
-**merchant** (API key, prefix `sitem_`) and a **tenant** (`user_id`, token prefix `site_`).
-`user_id` is unique only *within* a merchant, so naming a tenant requires both parts.
+Every request is scoped to the merchant its credential names. A caller cannot declare a tenant in a request body — that is refused, not ignored — and the admin token is not an API key and cannot act for a subject.
 
-There are four mutually exclusive credentials, and each one fully determines the merchant:
-a tenant token, a merchant API key, the platform admin token, and a console session. All
-four failure modes return an identical 401, so the endpoint cannot be used to probe which
-merchant or tenant names exist.
-
-- A merchant key may act for a subject **inside its own merchant** by sending
-  `X-Acting-Subject` (32 lowercase hex, derived by the caller as
-  `HMAC-SHA256(salt, tenant_id + "\0" + subject_id)[:16]`), and only if the key carries the
-  `mayActAsSubjects` grant. A key without the grant that sends the header gets 403 — it is
-  not quietly demoted to its own identity. A key *with* the grant that omits the header gets
-  400 rather than a guessed default.
-- A missing tenant row is created on first use. A missing **merchant** never is; logins do
-  not create merchants, and an unmapped claim is refused rather than landed in a default.
-- Merchant API keys expire (90 days by default, restarted by rotation). An expired key is
-  refused with the same 401 as an unknown one. Revocation is re-checked per request.
-- Namespaces, custom-resource names, network policies, and public routes are separated by
-  the digest of the `(merchant, tenant)` pair.
-- Quotas are two-layered: tenant (deployments, public routes) and merchant (tenant count,
-  aggregate deployments). Exceeding either returns 429 with `quota_exceeded` or
-  `merchant_quota_exceeded`. Namespace CPU, memory, and Pod totals are enforced separately
-  by Kubernetes.
-
-[docs/AUTH.md](docs/AUTH.md) is the authority: credentials, revocation timing,
-`X-Acting-Subject`, how merchants and tenants come into existence, and every refusal a
-client can receive.
-
-### Admin console login
-
-The console signs in through the deployment's own OpenID Connect provider (Authorization
-Code + PKCE, RS256 ID tokens, and an audience that must be configured and must differ from
-every other service on that provider). With no provider configured, the service token is
-accepted at `POST /v1/auth/local` instead.
-
-**Note:** that local login is the break-glass entrance — it bypasses the identity provider
-entirely, so every attempt is written to the audit log as `console_login` with the source
-address. `SITES_LOCAL_LOGIN_ENABLED=false` closes the authentication path itself: the
-endpoint answers 403 and the service token stops being accepted as a credential anywhere.
-The API refuses to start if the configuration would leave no way in at all, and when OIDC
-replaces the local path, both `SITES_OIDC_ADMIN_CLAIM` and `SITES_OIDC_ADMIN_VALUE` become
-mandatory — merchant-only claims cannot bootstrap the management plane.
-
-```bash
-# Administrator (admin token)
-sites admin merchants create acme --display-name "Acme"        # API key printed once, in clear
-sites admin tenants create alice --merchant acme --max-deployments 5
-sites admin tenants rotate alice --merchant acme               # new token; also re-enables a disabled tenant
-
-# Tenant
-SITES_TOKEN=site_... sites whoami
-```
-
-The management APIs accept admin tokens only and are intentionally **not** exposed to agents
-as MCP tools.
+[docs/AUTH.md](docs/AUTH.md) is the contract: the credential types, what each one may do, how the acting subject is derived, and the error codes you get when it is wrong.
 
 ## Agent integration
 
-Two interfaces, same capabilities:
-
-- **CLI** — usable by any agent that can run a shell, with no configuration file.
-- **MCP** — `sites mcp` speaks stdio. Tool descriptions are generated at startup from
-  `GET /v1/capabilities`, so the boundaries an agent sees always match the control plane.
-  Assets deployed through MCP belong to the calling user, not the service identity. Write
-  tools run a read-only quota and deployment preflight and return `quota_preflight_blocked`
-  before POST when a quota is already full; final admission is still decided atomically by
-  the control plane.
-
-```json
-{
-  "mcpServers": {
-    "sites": {
-      "command": "sites",
-      "args": ["mcp"],
-      "env": {
-        "SITES_URL": "http://127.0.0.1:18091",
-        "SITES_TOKEN_FILE": "/etc/sites/token"
-      }
-    }
-  }
-}
-```
-
-Use `SITES_TOKEN_FILE` to keep the credential outside the working directory. MCP
-configuration usually lives there, and an agent that can read a clear-text token may copy it
-into a shell command where it leaks through shell history or `ps`.
-
-The reusable agent workflow — static publishing, dynamic PostgreSQL schema deployment,
-immutable versions, revision-matched verification, and guarded NL2SQL — is maintained in
-[`skills/sites`](skills/sites) so other agent developers do not copy instructions by hand:
-
-```bash
-python scripts/install-agent-sites-skill.py /path/to/agent --check   # exits non-zero if it differs
-python scripts/install-agent-sites-skill.py /path/to/agent --force   # replaces only builtin_skills/sites
-```
-
-See [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md) for the complete agent contract.
+An agent reaches this over MCP — the tools, their arguments and their failure modes are in [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md), which is what the agent side is written against.
 
 ## Site data, versions, and rollback
 
@@ -322,67 +257,9 @@ promoted artifact.
 
 ## Deployment and configuration
 
-`charts/site` is the product-owned, independently renderable deployment contract — Helm,
-Argo CD, Flux, and other OCI-aware controllers consume it without cloning anything else.
+The chart is the supported path and renders 36 objects into one namespace. `clusterNetwork.podCIDR` has no default and the operator refuses to start if its own address falls outside what you declared — a wrong value would silently turn the NetworkPolicies into allow-all.
 
-```bash
-make chart-lint      # helm lint charts/site
-make chart-render    # helm template site charts/site
-```
-
-Chart templates apply in filename-prefix order: `00-platform` (CRDs) → `01-storage` →
-`05-postgres` → `07-build-plane` → `08-gateway` (Envoy Gateway and the sites-exposure
-ConfigMap) → `09-activator` → `10-control-plane` (api and operator) → `11-monitoring`
-(optional) → `12-tracing` (optional). CRDs, storage, and the three control-plane processes
-are static; the operator creates tenant Namespaces, Deployments, Services, HTTPRoutes,
-ScaledObjects, and NetworkPolicies dynamically from custom resources.
-
-**Exposure.** The `gateway` backend uses Envoy Gateway plus HTTPRoute (domain
-`<svc>-<digest>.<suffix>`); the `nodeport` backend allocates from a port pool. Switching
-only changes `SITES_EXPOSURE_BACKEND`, and drift resync migrates existing routes.
-`scaleToZero` defaults to **off** and is never inferred — it must be requested explicitly,
-and it requires the gateway backend.
-
-**Scale to zero.** KEDA polls the activator's `/scale-metrics` → idle workloads scale to
-zero → traffic reaches the activator → it looks up the route, patches the scale subresource
-to wake the site, and forwards the request after bounded connection retries. Lifecycle phase
-and replica state are reported separately: a dormant site is still `phase=Running`, with
-`runtimeState=Dormant` and `observedReplicas=0`.
-
-**Metadata storage.** PostgreSQL only. The local reference deployment owns an isolated
-StatefulSet and PVC via `05-postgres.yaml`; production can substitute a managed endpoint for
-the stable `sites-postgres` Service contract. SQLite and MySQL are not runtime or test
-backends.
-
-**Source-build storage.** `SITES_SOURCE_BACKEND=pvc` (default) writes into the
-`sites-sources` PVC. With `oss`, the API writes the same content-addressed package to a
-private bucket over the S3-compatible API, and the builder Job verifies the digest in an
-initContainer before BuildKit runs. Access keys are read only from files in the
-`sites-oss-auth` Secret and never enter a SiteBuild CR or an environment variable.
-
-Which knobs belong where — code, GitOps, admin console, or tenant request — is settled in
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md). Full operator reference, including OIDC
-variables, timeouts, and the Secret key contract, is in
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
-
-### Monitoring and tracing
-
-[`charts/site/templates/11-monitoring.yaml`](charts/site/templates/11-monitoring.yaml)
-ships a single-replica Prometheus that scrapes the api, operator, and activator admin ports
-plus the gateway and cadvisor. Alert rules live in the same ConfigMap
-(`sites-prometheus-config`, key `sites-alerts.yml`) and cover what readiness probes cannot
-see: a dependency flipping to 0, a stale snapshot or reconcile sweep, cold-start and
-forwarding failures, and any control-plane target disappearing. There is no Alertmanager in
-the reference deployment, so read firing rules from the Prometheus UI at `/alerts` or query
-`ALERTS{alertstate="firing"}`. `tests/test_monitoring.py` checks every metric name in the
-rules against the registrations in `src/sites/*.py` — a misspelled name never errors, it
-just never fires.
-
-Tracing is optional and standalone-safe. Set Helm `tracing.enabled=true` and
-`tracing.endpoint` to emit dependency-free OTLP-HTTP JSON spans. The API and activator
-accept upstream W3C `traceparent`, and build/deploy resources preserve it through
-asynchronous reconciliation. Collector failure never fails traffic; span loss surfaces as
-`sites_tracing_export_total`.
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) has the values, the secrets you create, and the integration seams; [docs/CONFIGURATION.md](docs/CONFIGURATION.md) has every setting.
 
 ## Security boundaries
 
