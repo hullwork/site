@@ -22,30 +22,6 @@ not a claim.
 > between them are, and how to install the set on an enterprise cluster. This README does
 > not repeat any of that — it is about `site` alone.
 
-## Why this instead of a generic deploy tool
-
-- **Success is evidence, not an exit code.** `status.verification` carries `httpStatus` and
-  `bodySha256` from a request the control plane made itself. Redirects are not followed and
-  only 2xx counts, because those are the two facts a tenant cannot forge. The evidence is
-  bounded on purpose: it proves something at that address returned 2xx with that body
-  digest — not that the body is semantically correct, since the tenant produced it.
-- **The caller cannot name the tenancy it writes into.** Identity is a `(merchant, tenant)`
-  pair decided entirely by the credential. `X-Merchant-ID` and `X-User-ID` are **refused
-  with 403**, not ignored, so a misconfigured client fails loudly instead of quietly
-  filling a stranger's namespace.
-- **The submission surface is small by construction.** Secret *values* are never accepted —
-  only references to Secrets an operator already created. Binary build contexts are
-  rejected. Static direct deployment takes flat text files only.
-- **Rollback needs no state carried backwards.** Automatic schema migration is restricted by
-  a sqlglot AST allow-list in [`migrations.py`](src/sites/migrations.py) to
-  `CREATE TABLE/INDEX IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`; anything that fails to
-  parse, or that names another schema, raises. DDL can therefore only ever be additive, so
-  an older image still runs against a newer schema.
-- **Multi-tenant isolation is derived, not concatenated.** Namespace and resource names come
-  from a SHA-256 digest of both identity parts. Concatenation is not injective — merchant
-  `a-ub` + tenant `c` and merchant `a` + tenant `b-uc` would collide onto one Namespace, and
-  the Namespace *is* the isolation boundary.
-
 ```text
  ┌─ an agent asks for a deployment ────────────────────────────────────────┐
  │  MCP tools          `sites` CLI          HTTP API          console      │
@@ -137,6 +113,31 @@ limits that change with the deployed version:
 export SITES_URL=http://127.0.0.1:18091   # the client default
 sites capabilities
 ```
+
+## Why this instead of a generic deploy tool
+
+- **Success is evidence, not an exit code.** `status.verification` carries `httpStatus` and
+  `bodySha256` from a request the control plane made itself. Redirects are not followed and
+  only 2xx counts, because those are the two facts a tenant cannot forge. The evidence is
+  bounded on purpose: it proves something at that address returned 2xx with that body
+  digest — not that the body is semantically correct, since the tenant produced it.
+- **The caller cannot name the tenancy it writes into.** Identity is a `(merchant, tenant)`
+  pair decided entirely by the credential. `X-Merchant-ID` and `X-User-ID` are **refused
+  with 403**, not ignored, so a misconfigured client fails loudly instead of quietly
+  filling a stranger's namespace.
+- **The submission surface is small by construction.** Secret *values* are never accepted —
+  only references to Secrets an operator already created. Binary build contexts are
+  rejected. Static direct deployment takes flat text files only.
+- **Rollback needs no state carried backwards.** Automatic schema migration is restricted by
+  a sqlglot AST allow-list in [`migrations.py`](src/sites/migrations.py) to
+  `CREATE TABLE/INDEX IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`; anything that fails to
+  parse, or that names another schema, raises. DDL can therefore only ever be additive, so
+  an older image still runs against a newer schema.
+- **Multi-tenant isolation is derived, not concatenated.** Namespace and resource names come
+  from a SHA-256 digest of both identity parts. Concatenation is not injective — merchant
+  `a-ub` + tenant `c` and merchant `a` + tenant `b-uc` would collide onto one Namespace, and
+  the Namespace *is* the isolation boundary.
+
 
 ## Deployment forms
 
