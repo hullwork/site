@@ -8,7 +8,7 @@ spec:
   namespaceMode: values
   source:
     type: oci
-    repoURL: oci://ghcr.io/convee/charts/site
+    repoURL: oci://ghcr.io/hullwork/charts/site
     path: .
     renderer: helm
   capabilities:

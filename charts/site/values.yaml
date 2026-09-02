@@ -4,7 +4,7 @@ namespaces:
 
 images:
   control:
-    repository: ghcr.io/convee/site-control
+    repository: ghcr.io/hullwork/site-control
     tag: "v0.1.0"
     digest: ""
     pullPolicy: IfNotPresent

@@ -17,7 +17,7 @@ PostgreSQL and the build plane are independently switchable. All images accept
 digest overrides through the validated `values.schema.json` surface.
 
 `package.yaml` is optional composition metadata and is not read by Helm. Tagged
-releases publish the chart to `oci://ghcr.io/convee/charts/site` plus a
+releases publish the chart to `oci://ghcr.io/hullwork/charts/site` plus a
 machine-readable package metadata asset. A runnable deployment also requires
 the release workflow to have published the corresponding `site-control`
 image; publishing the chart alone is not runtime acceptance.
