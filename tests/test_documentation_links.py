@@ -7,6 +7,17 @@ parses, the tests pass, and only someone following the link finds out.
 Checks markdown link targets and inline-code paths that look like repository
 files. Anchors, external URLs and glob patterns are skipped rather than
 guessed at.
+
+Four link forms were invisible to this and one produced a false positive, all
+found by feeding it a table of nineteen shapes rather than by reading the
+regex: a reference definition, an angle-bracketed target, and an HTML `href` or
+`src` were never checked, while an inline link carrying a title -- the ordinary
+`[a](x.md "why")` -- had the title counted as part of the path and was reported
+broken. A false positive is the worse of the two: it fails a correct document
+and teaches people the gate is noise.
+
+Links inside fenced code blocks are skipped. They are examples, and a document
+showing a broken link on purpose is not a broken document.
 """
 import pathlib
 import re
@@ -14,7 +25,28 @@ import subprocess
 import unittest
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+#: `[label]: target` at the start of a line, the definition half of a reference
+#: link. The use half (`[text][label]`, `[label][]`, `[label]`) needs no check
+#: of its own: the target only ever appears here.
+REFERENCE_DEFINITION = re.compile(r"^\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
+#: `href=` and `src=` in raw HTML, which markdown passes through untouched.
+HTML_TARGET = re.compile(r"(?:href|src)\s*=\s*[\"']([^\"']+)[\"']")
+FENCE = re.compile(r"^\s*(```|~~~)")
+#: The optional title after a link target: `"..."`, `'...'` or `(...)`.
+TITLE = re.compile(r"""\s+(?:"[^"]*"|'[^']*'|\([^)]*\))\s*$""")
 CODEPATH = re.compile(r"`([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|sh|md|ya?ml|json|toml|ts|tsx|cfg|txt))`")
+
+
+def outside_fences(text: str) -> str:
+    """The document with fenced code blocks blanked out, line numbering intact."""
+    kept, fenced = [], False
+    for line in text.splitlines():
+        if FENCE.match(line):
+            fenced = not fenced
+            kept.append("")
+            continue
+        kept.append("" if fenced else line)
+    return "\n".join(kept)
 
 
 def tracked(root: pathlib.Path) -> set[str]:
@@ -33,6 +65,17 @@ def tracked(root: pathlib.Path) -> set[str]:
 def resolve(root: pathlib.Path, source: str, target: str) -> str | None:
     if target.startswith(("http://", "https://", "mailto:", "#")):
         return None
+    target = target.strip()
+    # `[a](<path with spaces.md>)` is the angle-bracket form of an ordinary
+    # target, not a glob. Unwrap before the glob check below rejects it for
+    # containing `<`.
+    if target.startswith("<") and target.endswith(">"):
+        target = target[1:-1].strip()
+    # `[a](path.md "title")` -- the title is not part of the path. Counting it
+    # made every titled link in the tree report as broken. Strip the whole
+    # quoted run, not the last space-separated token: a title contains spaces,
+    # and splitting on the last one leaves `path.md "the` behind.
+    target = TITLE.sub("", target).strip()
     target = target.split("#", 1)[0].strip()
     if not target or any(c in target for c in "*{}$<>"):
         return None
@@ -63,7 +106,10 @@ def check(root: pathlib.Path) -> tuple[int, list[str]]:
         # file, often one in another repository or one that has since moved on
         # purpose; treating those as links reported 513 "broken" references
         # across five repositories, almost all of them CHANGELOG entries.
-        targets = [m.group(1) for m in LINK.finditer(text)]
+        body = outside_fences(text)
+        targets = [m.group(1) for m in LINK.finditer(body)]
+        targets += [m.group(1) for m in REFERENCE_DEFINITION.finditer(body)]
+        targets += [m.group(1) for m in HTML_TARGET.finditer(body)]
         for raw in targets:
             rel = resolve(root, name, raw)
             if rel is None:
