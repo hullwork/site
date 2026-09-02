@@ -6,7 +6,7 @@ Security fixes target the latest published release and current `main`. Old commi
 
 ## Reporting a vulnerability
 
-Use [GitHub private vulnerability reporting](https://github.com/convee/site/security/advisories/new). Do not open a public issue for a vulnerability.
+Use [GitHub private vulnerability reporting](https://github.com/hullwork/site/security/advisories/new). Do not open a public issue for a vulnerability.
 
 Include the commit or release, affected endpoint or component, tenant/merchant impact, reproduction steps, logs with secrets removed, and any mitigation you identified. Maintainers aim to acknowledge reports within five business days.
 

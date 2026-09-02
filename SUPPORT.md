@@ -6,9 +6,9 @@ site is alpha software. Maintainers support the documented HTTP/MCP/CLI contract
 
 ## Where to ask
 
-- Reproducible bug: open a [GitHub issue](https://github.com/convee/site/issues/new?template=bug_report.md).
-- Scoped feature or documentation change: open a [feature request](https://github.com/convee/site/issues/new?template=feature_request.md).
-- Security vulnerability: use [private vulnerability reporting](https://github.com/convee/site/security/advisories/new).
+- Reproducible bug: open a [GitHub issue](https://github.com/hullwork/site/issues/new?template=bug_report.md).
+- Scoped feature or documentation change: open a [feature request](https://github.com/hullwork/site/issues/new?template=feature_request.md).
+- Security vulnerability: use [private vulnerability reporting](https://github.com/hullwork/site/security/advisories/new).
 - Contribution questions: start a pull request draft or open an issue with your proposed contract and test plan.
 
 ## Information to include

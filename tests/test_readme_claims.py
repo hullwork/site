@@ -114,13 +114,13 @@ class CompositionPointerTests(unittest.TestCase):
     #: URL, and dropping either is a defect.
     #:
     #: Each carries its own terminator on purpose. A bare substring stays green
-    #: through the rename that matters most - "convee/platform-composition-v2"
-    #: contains "convee/platform-composition" - which is the same shape as an
+    #: through the rename that matters most - "hullwork/platform-composition-v2"
+    #: contains "hullwork/platform-composition" - which is the same shape as an
     #: unanchored pattern matching inside a longer word. The backticks and the
     #: closing parenthesis are the anchors; the suffix-rename mutation in the
     #: pull request is what shows they hold.
-    SLUG = "`convee/platform-composition`"
-    URL = "](https://github.com/convee/platform-composition)"
+    SLUG = "`hullwork/platform-composition`"
+    URL = "](https://github.com/hullwork/platform-composition)"
 
     def setUp(self) -> None:
         self.text = README.read_text(encoding="utf-8")

@@ -13,7 +13,7 @@ Requirements:
 - Node.js 22 and npm for console changes
 
 ```bash
-git clone https://github.com/convee/site.git
+git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db

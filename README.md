@@ -1,6 +1,6 @@
 # site
 
-[![CI](https://github.com/convee/site/actions/workflows/ci.yml/badge.svg)](https://github.com/convee/site/actions/workflows/ci.yml)
+[![CI](https://github.com/hullwork/site/actions/workflows/ci.yml/badge.svg)](https://github.com/hullwork/site/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **A deployment control plane that lets an AI agent ship a website to Kubernetes — and
@@ -17,7 +17,7 @@ not a claim.
 > — that section is deliberately specific.
 
 > **Where this fits.** `site` is one of four independently released repositories.
-> [`convee/platform-composition`](https://github.com/convee/platform-composition) is the
+> [`hullwork/platform-composition`](https://github.com/hullwork/platform-composition) is the
 > only place that describes all four together: what each one is, where the boundaries
 > between them are, and how to install the set on an enterprise cluster. This README does
 > not repeat any of that — it is about `site` alone.
@@ -54,7 +54,7 @@ Prerequisites: [uv](https://docs.astral.sh/uv/), Docker, and Python 3.12+. The s
 roughly one to two minutes on a warm checkout.
 
 ```bash
-git clone https://github.com/convee/site.git
+git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
@@ -402,7 +402,7 @@ asynchronous reconciliation. Collector failure never fails traffic; span loss su
   both silently fall back to plaintext when the server declines TLS.
 - Metric label sets deliberately exclude merchant, tenant, and site identifiers.
 
-Report vulnerabilities through [private advisories](https://github.com/convee/site/security/advisories/new);
+Report vulnerabilities through [private advisories](https://github.com/hullwork/site/security/advisories/new);
 see [SECURITY.md](SECURITY.md).
 
 ## Known limitations
@@ -457,7 +457,7 @@ production is worse off than one who reads them here.
 ## Installation as a package
 
 ```bash
-pip install "site @ git+https://github.com/convee/site.git"
+pip install "site @ git+https://github.com/hullwork/site.git"
 sites --help
 ```
 
@@ -505,7 +505,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for review expectations and the PR checkl
 
 ## Project
 
-This repository was split out of the `sites/` history of `convee/agent`. It now owns its
+This repository was split out of the `sites/` history of `hullwork/agent`. It now owns its
 Python package, CLI and MCP server, control-plane image, console, Helm chart, and tests.
 Consumers integrate through the HTTP, MCP, package, and chart contracts; neither `agent` nor
 any infrastructure repository is a build or runtime prerequisite.

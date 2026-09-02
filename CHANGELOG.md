@@ -147,7 +147,7 @@ All notable changes to this project are documented in this file. The format foll
 ### Added
 
 - `NOTICE` and per-component records inside the image at
-  `/usr/share/licenses/`, in the shape `convee/infra` already uses for the AGPL
+  `/usr/share/licenses/`, in the shape `hullwork/infra` already uses for the AGPL
   MinIO client. This repository is MIT and its image distributes `psycopg` and
   `psycopg-binary`, both LGPL-3.0-only; importing a library and shipping a copy
   of it are different acts and only the second carries the obligation, so

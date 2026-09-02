@@ -24,11 +24,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/convee/site"
-Documentation = "https://github.com/convee/site/tree/main/docs"
-Issues = "https://github.com/convee/site/issues"
-Security = "https://github.com/convee/site/security/advisories/new"
-Source = "https://github.com/convee/site"
+Homepage = "https://github.com/hullwork/site"
+Documentation = "https://github.com/hullwork/site/tree/main/docs"
+Issues = "https://github.com/hullwork/site/issues"
+Security = "https://github.com/hullwork/site/security/advisories/new"
+Source = "https://github.com/hullwork/site"
 
 [project.scripts]
 sites = "sites.cli:main"

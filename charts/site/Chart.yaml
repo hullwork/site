@@ -4,9 +4,9 @@ description: Product-owned Site control plane package for Kubernetes
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-home: https://github.com/convee/site
+home: https://github.com/hullwork/site
 sources:
-  - https://github.com/convee/site
+  - https://github.com/hullwork/site
 annotations:
   artifacthub.io/license: MIT
   site.convee.io/package-capabilities: sites-control-plane,sites-operator
