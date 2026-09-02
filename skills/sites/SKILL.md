@@ -7,7 +7,7 @@ description: Build, deploy, iterate, version, and query site static or PostgreSQ
 
 Use the Sites MCP as the deployment boundary. Build and test source in the workspace, then publish only when the user asks for deployment, hosting, a public URL, or an update to an already deployed site.
 
-The full connector tool names use the `mcp_sites_sites_*` prefix; this skill uses short names below. This skill does not grant tools, infrastructure or permissions. Do not use host Docker, a Docker socket, `kubectl`, or a prose claim as a substitute for MCP deployment evidence. If the Sites connector is unavailable, report the missing capability.
+The full connector tool names use the `mcp_site_*` prefix; this skill uses short names below. This skill does not grant tools, infrastructure or permissions. Do not use host Docker, a Docker socket, `kubectl`, or a prose claim as a substitute for MCP deployment evidence. If the Sites connector is unavailable, report the missing capability.
 
 ## Discover the live contract
 
