@@ -70,12 +70,12 @@ up() {
   require_command kubectl
   require_command helm
   "$root/scripts/bootstrap-standalone-secrets.sh" --namespace "$namespace"
-  helm "${helm_context_args[@]}" upgrade --install "$release" \
+  helm ${helm_context_args[@]+"${helm_context_args[@]}"} upgrade --install "$release" \
     "$root/charts/site" --namespace "$namespace" --create-namespace \
     --values "$values_file" \
     --set "namespaces.control=$namespace" \
     --set "namespaces.gateway=$namespace" \
-    "${image_args[@]}"
+    ${image_args[@]+"${image_args[@]}"}
   verify
 }
 

@@ -53,12 +53,12 @@ case "$action" in
   install)
     command -v helm >/dev/null || { echo "helm is required" >&2; exit 2; }
     "$root/scripts/bootstrap-standalone-secrets.sh" --namespace "$namespace"
-    helm "${helm_context[@]}" upgrade --install "$release" "$root/charts/site" \
+    helm ${helm_context[@]+"${helm_context[@]}"} upgrade --install "$release" "$root/charts/site" \
       --namespace "$namespace" --create-namespace --values "$values_file" \
       --set-string "namespaces.control=$namespace" \
       --set-string "namespaces.gateway=$namespace" \
-      "${helm_set_value[@]}" \
-      "${helm_set[@]}"
+      ${helm_set_value[@]+"${helm_set_value[@]}"} \
+      ${helm_set[@]+"${helm_set[@]}"}
     ;;
   smoke)
     command -v kubectl >/dev/null || { echo "kubectl is required" >&2; exit 2; }
@@ -116,7 +116,7 @@ case "$action" in
       --ignore-not-found --wait=true --timeout=5m
     kube -n "$namespace" delete sitebuilds.sites.local --all \
       --ignore-not-found --wait=true --timeout=5m
-    helm "${helm_context[@]}" uninstall "$release" --namespace "$namespace" --wait
+    helm ${helm_context[@]+"${helm_context[@]}"} uninstall "$release" --namespace "$namespace" --wait
     echo "release removed; namespace, Secrets, and persistent data were preserved"
     ;;
   *) usage >&2; exit 2 ;;
