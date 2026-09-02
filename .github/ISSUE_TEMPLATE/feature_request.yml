@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a scoped capability or documentation improvement.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What cannot be done today. Describe the situation, not the fix.
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Proposed contract
+      description: >
+        The CLI, MCP or HTTP surface you are proposing, not the implementation.
+        What does a caller send and what comes back.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: textarea
+    id: tenancy
+    attributes:
+      label: Tenancy, quota, and security impact
+      description: >
+        What this would let one tenant see or consume that it cannot today. A
+        proposal that touches the tenant boundary is not rejected for that, but
+        it is reviewed differently.
+    validations:
+      required: true
+  - type: textarea
+    id: documentation
+    attributes:
+      label: Documentation impact
+      description: Which documents would have to change.

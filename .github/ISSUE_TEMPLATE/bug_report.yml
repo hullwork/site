@@ -1,0 +1,64 @@
+name: Bug report
+description: Report reproducible incorrect behavior without including secrets.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include kubeconfigs, API keys, deploy tokens, or production data.
+        Anything that lets one tenant reach another is a vulnerability, not a
+        bug: report it privately through SECURITY.md instead of here.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences on what is wrong.
+    validations:
+      required: true
+  - type: dropdown
+    id: contract
+    attributes:
+      label: Affected contract
+      options:
+        - CLI
+        - MCP
+        - HTTP API
+        - Operator
+        - Activator
+        - Console
+        - Deployment
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal steps and sanitized configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      value: |
+        - Commit or release:
+        - Deployment mode:
+        - Capability response, with secrets removed:
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: >
+        What you observed rather than what you concluded: the response, the log
+        line, the state you read back. A deployment reporting itself healthy is
+        a claim; what a request to it returned is evidence.
