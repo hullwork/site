@@ -1857,6 +1857,99 @@ class DeletedStatusTests(unittest.TestCase):
         )
 
 
+class TenantDisableScopeTests(unittest.TestCase):
+    """Disabling a tenant must not reach across the merchant boundary.
+
+    `_TENANT_DISABLE_TEMPLATE` reads
+    `WHERE merchant_id = ? AND user_id = ? AND disabled_at IS NULL`, and every
+    part of that was unverified: deleting the merchant_id predicate outright
+    changed nothing in the suite, because nothing executed the statement at
+    all. Tenant names are chosen by each merchant independently, so two
+    merchants sharing one -- "admin", "default", "api" -- is the ordinary case,
+    not a contrived one, and one merchant disabling another's tenant takes that
+    tenant's sites down.
+
+    The third clause matters for a different reason: without
+    `disabled_at IS NULL`, a second disable overwrites the original moment, and
+    the audit trail says the tenant was disabled at whatever time somebody last
+    pressed the button.
+    """
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / "sites.db"
+        self.store = postgres_store(self.path)
+        self.store.migrate()
+        for merchant in ("merchant-a", "merchant-b"):
+            self.store.create_merchant(
+                merchant, merchant.title(), token_digest(f"key-{merchant}"), 10, 20
+            )
+            # The same tenant name under both. Each merchant names its own
+            # tenants, so a collision is normal.
+            self.store.create_tenant(
+                merchant,
+                "shared",
+                token_digest(f"token-{merchant}"),
+                max_deployments=3,
+                max_public_routes=1,
+            )
+
+    def test_disabling_stops_at_the_merchant_boundary(self) -> None:
+        self.store.disable_tenant("merchant-a", "shared")
+        self.assertIsNotNone(
+            self.store.tenant("merchant-a", "shared")["disabled_at"]
+        )
+        self.assertIsNone(
+            self.store.tenant("merchant-b", "shared")["disabled_at"],
+            "one merchant disabled another merchant's tenant",
+        )
+
+    def test_disabling_stops_at_the_tenant_name(self) -> None:
+        """Reverse control: a predicate that matches nothing also leaves B alone."""
+        self.store.create_tenant(
+            "merchant-a",
+            "other",
+            token_digest("token-other"),
+            max_deployments=3,
+            max_public_routes=1,
+        )
+        self.store.disable_tenant("merchant-a", "shared")
+        self.assertIsNone(
+            self.store.tenant("merchant-a", "other")["disabled_at"]
+        )
+
+    def test_a_second_disable_keeps_the_first_moment(self) -> None:
+        self.store.disable_tenant("merchant-a", "shared")
+        first = self.store.tenant("merchant-a", "shared")["disabled_at"]
+        self.assertIsNotNone(first)
+        time.sleep(0.01)
+        self.store.disable_tenant("merchant-a", "shared")
+        self.assertEqual(
+            first,
+            self.store.tenant("merchant-a", "shared")["disabled_at"],
+            "the second disable rewrote when the tenant was disabled",
+        )
+
+    def test_rotating_a_token_revives_only_that_merchants_tenant(self) -> None:
+        """The rotate statement carries the same predicate and the same risk.
+
+        Rotation clears disabled_at on purpose -- signing a new certificate
+        means the tenant should be alive -- so a merchant_id that does not bind
+        would let one merchant re-enable another's disabled tenant.
+        """
+        self.store.disable_tenant("merchant-a", "shared")
+        self.store.disable_tenant("merchant-b", "shared")
+        self.store.rotate_tenant_token("merchant-a", "shared", token_digest("new-a"))
+        self.assertIsNone(
+            self.store.tenant("merchant-a", "shared")["disabled_at"]
+        )
+        self.assertIsNotNone(
+            self.store.tenant("merchant-b", "shared")["disabled_at"],
+            "one merchant re-enabled another merchant's disabled tenant",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Exception translation: "Already exists" leaves only unique constraint violations. Used create_tenant / create_merchant
 # Translate **any** exception into already exists, and a database failure will be reported as a 409 type conflict by the API.
