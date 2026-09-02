@@ -1,0 +1,179 @@
+{{- if .Values.postgresql.embedded.enabled }}
+# Local PostgreSQL metadata database for the isolated Sites cluster.
+#
+# Production deployments may replace this StatefulSet with a managed PostgreSQL
+# endpoint, but the local kubeadm topology owns its database and PVC inside the
+# site cluster.  The stable Service name keeps control-plane configuration
+# independent from the selected PostgreSQL implementation.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sites-postgres
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-postgres
+    app.kubernetes.io/part-of: sites
+spec:
+  selector:
+    app.kubernetes.io/name: sites-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sites-postgres
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-postgres
+    app.kubernetes.io/part-of: sites
+spec:
+  serviceName: sites-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sites-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sites-postgres
+        app.kubernetes.io/part-of: sites
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ include "site.image" (list .Values.images.postgres) }}
+          imagePullPolicy: {{ .Values.images.postgres.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecrets.database.name }}
+                  key: {{ .Values.existingSecrets.database.usernameKey }}
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecrets.database.name }}
+                  key: {{ .Values.existingSecrets.database.databaseKey }}
+            - name: POSTGRES_PASSWORD_FILE
+              value: /var/run/secrets/sites-postgres/password
+            - name: POSTGRES_INITDB_ARGS
+              value: --auth-host=scram-sha-256
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          startupProbe:
+            exec:
+              command: ["sh", "-ec", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            failureThreshold: 90
+            periodSeconds: 2
+          readinessProbe:
+            exec:
+              command: ["sh", "-ec", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command: ["sh", "-ec", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: database-auth
+              mountPath: /var/run/secrets/sites-postgres
+              readOnly: true
+            - name: postgres-run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: database-auth
+          secret:
+            secretName: {{ .Values.existingSecrets.database.name }}
+            items:
+              - key: {{ .Values.existingSecrets.database.passwordKey }}
+                path: password
+            defaultMode: 0440
+        - name: postgres-run
+          emptyDir: {}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: sites-postgres
+          app.kubernetes.io/part-of: sites
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ .Values.storage.storageClass | quote }}
+        resources:
+          requests:
+            storage: 4Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sites-postgres
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-postgres
+    app.kubernetes.io/part-of: sites
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sites-postgres
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sites-api
+      ports:
+        - protocol: TCP
+          port: 5432
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              sites.local/managed: "true"
+          podSelector:
+            matchLabels:
+              sites.local/database-access: "true"
+      ports:
+        - protocol: TCP
+          port: 5432
+  egress: []
+
+{{- end }}

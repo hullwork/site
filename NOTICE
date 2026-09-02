@@ -1,0 +1,79 @@
+# Third-party components in the distributed image
+
+This repository is MIT (see `LICENSE`). The container image built from
+`Dockerfile` also **distributes** third-party components, and some of them are
+copyleft. Importing a library and shipping a copy of it are different acts; this
+file is about the second one.
+
+Everything below was read from the artifacts themselves, not from memory:
+Python licences from installed package metadata (`License-Expression` /
+classifiers), console licences from each package's `package.json`, base-image
+licences from the Alpine package database in the pinned base image.
+
+## What this image adds
+
+### Copyleft — obligations attach
+
+| Component | Version | Licence | In the image at |
+| --- | --- | --- | --- |
+| `psycopg` | 3.3.4 | **LGPL-3.0-only** | `/usr/share/licenses/psycopg/` |
+| `psycopg-binary` | 3.3.4 | **LGPL-3.0-only** | `/usr/share/licenses/psycopg-binary/` |
+
+Both are unconditional runtime dependencies: the control plane's only database
+driver. Each directory holds the upstream `LICENSE` as published in the wheel
+and a `SOURCE` file naming the exact version, where the corresponding source is
+published, and the fact that the package is installed **unmodified**.
+
+Being unmodified is the load-bearing part for LGPL-3.0 section 4: `psycopg` is
+an ordinary, separately installable Python package, so a recipient can replace
+it with a different version in a derived image
+(`pip install "psycopg==<version>"`) without rebuilding anything else here.
+
+`psycopg-binary` additionally bundles libpq (PostgreSQL Licence) and OpenSSL
+(Apache-2.0); both are permissive and are covered by the upstream project's own
+distribution.
+
+### Permissive — no obligations beyond attribution
+
+Python: `boto3`, `botocore`, `s3transfer` (Apache-2.0); `jmespath`, `six`,
+`sqlglot`, `urllib3` (MIT); `python-dateutil` (dual BSD-3-Clause / Apache-2.0).
+
+Console bundle (`/app/console`): `react`, `react-dom`, `scheduler` (MIT);
+`lucide-react` (ISC). No copyleft component reaches the JavaScript bundle.
+
+`tzdata` appears in `requirements.lock` but is marked `sys_platform == 'win32'`
+and is therefore **not** installed in this image.
+
+## What this image inherits and does not modify
+
+The base image is `python:3.14-alpine3.24`, pinned by digest
+`sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13c30ede22769dcdc`.
+
+It carries 30 Alpine packages, several of them copyleft — `busybox`,
+`busybox-binsh`, `ssl_client`, `apk-tools`, `libapk`, `scanelf`,
+`alpine-baselayout` (GPL-2.0-only), `readline`, `gdbm` (GPL-3.0-or-later),
+`xz-libs` (GPL-2.0-or-later and LGPL-2.1-or-later), `musl-utils`
+(GPL-2.0-or-later in part), `ca-certificates` (MPL-2.0 and MIT).
+
+None of them is modified, rebuilt, or statically linked into anything here; the
+base image is redistributed exactly as published, and its components' sources
+are published by Alpine and by the upstream `python` image. This is the same
+position as every Alpine-derived image. It is recorded rather than omitted so
+that a reader can tell what was assessed from what was inherited.
+
+## Rebuilding this list
+
+```bash
+# Python packages actually installed in the image
+uv run --locked --extra dev python -c "import importlib.metadata as m; [print(d.metadata['Name'], d.version, d.metadata.get('License-Expression') or d.metadata.get('License')) for d in m.distributions()]"
+
+# Console production tree
+npm --prefix console ls --omit=dev --all
+
+# Base image packages
+docker run --rm --entrypoint sh python:3.14-alpine3.24@sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13c30ede22769dcdc \
+  -c 'awk -F: "/^P:/{p=\$2} /^L:/{print \$2\"\t\"p}" /lib/apk/db/installed | sort'
+```
+
+A package whose licence cannot be read is **unknown**, not permissive. Resolve
+it by hand before adding it to a table above.

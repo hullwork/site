@@ -1,0 +1,154 @@
+{{- if .Values.gateway.enabled }}
+# Shared L7 portal for Sites (required only if SITES_EXPOSURE_BACKEND=gateway).
+#
+# This layer replaces "one NodePort per site": the site Service returns ClusterIP, and the operator returns
+# Each public site builds an HTTPRoute in the tenant namespace, and the gateway distributes traffic by Host. The income is
+# The number of public sites is no longer stuck by the 8 slots in the port pool, at the cost of one more component that must be alive.
+#
+# ⚠️ This file does not contain the Envoy Gateway ontology (controller + Gateway API CRD). it has its own
+#    The pace of publishing, embedding a copy is bound to rot. Install it first, then apply this file:
+#
+#      helm install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
+#        --version v1.2.4 -n envoy-gateway-system --create-namespace
+#      kubectl wait --for=condition=Available -n envoy-gateway-system \
+#        deploy/envoy-gateway --timeout=180s
+#
+# The EnvoyProxy patch below pins the generated data-plane Service to NodePort 30080.
+# If an Envoy Gateway version changes its generated port name, inspect the Service and
+# update the strategic-merge key accordingly.
+---
+# **All** adjustable items on the L7 entrance path are configured in one place and shared by three processes.
+#
+# 🔴 Why must we share one copy: sites-operator is spelled by SITES_DOMAIN_SUFFIX and HTTPRoute
+# hostname, sites-activator use the same value to calculate the key of the routing table, and sites-api uses it to spell it back to the call.
+# URL of the party. When the three places are allocated separately, the performance of any one place drifting is "the site cannot be accessed" - and three copies
+# The configuration alone is reasonable. When placed in ConfigMap, there is no such state as "only two changes" physically.
+#
+# Change to your own wildcard domain name: change SITES_DOMAIN_SUFFIX below, **at the same time** change Gateway listener
+# hostname (below this file, two places are nailed by GatewayManifestContractTest), and then give
+# `*.<your suffix>` Add a DNS record pointing to the gateway. Domain name goes 80/443 when SITES_GATEWAY_SCHEME
+# and SITES_GATEWAY_HOST_PORT must also be changed accordingly, otherwise the URL returned to the caller will contain local
+# 18090 port.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sites-exposure
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-exposure
+    app.kubernetes.io/part-of: sites
+data:
+  # Only when this value is gateway, the site will use the L7 entrance and scaleToZero will be allowed.
+  SITES_EXPOSURE_BACKEND: "gateway"
+  # Site hostname = <serviceName>-<tenant summary>.<this suffix>.
+  SITES_DOMAIN_SUFFIX: "127.0.0.1.sslip.io"
+# Host-facing URL scheme and port for the local Lima port forwarding.
+  SITES_GATEWAY_SCHEME: "http"
+  SITES_GATEWAY_HOST_PORT: "18090"
+  # The tenant image is in the workload registry, not the CP Registry that hosts the control plane image.
+  # The node containerd receives this stable name from the deployment portal to the Registry pull Service.
+  SITES_REGISTRY_PULL_HOST: "site-registry.convee.local:5000"
+{{- if ne .Values.namespaces.gateway .Release.Namespace }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespaces.gateway }}
+  labels:
+    sites.local/managed: "true"
+{{- end }}
+---
+# The shape of the data surface. Envoy Gateway builds a LoadBalancer type Service for Gateway by default.
+# A cluster without a LoadBalancer controller would otherwise leave the Service pending.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: sites-gateway-proxy
+  namespace: {{ .Values.namespaces.gateway }}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: {{ .Values.gateway.serviceType }}
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              # Lima maps node port 30080 to host port 18090; tests pin this
+              # mapping to GATEWAY_NODE_PORT and GATEWAY_HOST_PORT.
+              ports:
+                # Service port is the strategic-merge list key.
+                - name: http-80
+                  port: 80
+                  {{- if and (eq .Values.gateway.serviceType "NodePort") .Values.gateway.httpNodePort }}
+                  nodePort: {{ .Values.gateway.httpNodePort }}
+                  {{- end }}
+                # Expose Envoy metrics so Prometheus can detect an empty data-plane endpoint set.
+                - name: metrics
+                  port: 19001
+                  {{- if and (eq .Values.gateway.serviceType "NodePort") .Values.gateway.metricsNodePort }}
+                  nodePort: {{ .Values.gateway.metricsNodePort }}
+                  {{- end }}
+      envoyDeployment:
+        replicas: 1
+        container:
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: sites
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: sites-gateway-proxy
+    namespace: {{ .Values.namespaces.gateway }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: {{ .Values.namespaces.gateway }}
+  namespace: {{ .Values.namespaces.gateway }}
+spec:
+  gatewayClassName: sites
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      # Wildcard Host. The site hostname is <serviceName>-<tenant summary>.<SITES_DOMAIN_SUFFIX>,
+      # Default suffix 127.0.0.1.sslip.io - sslip.io resolves <any>.<IP>.sslip.io to
+      # This IP, then local zero configuration can give each site a resolvable name, and the number of sites is unlimited.
+      #
+      # 🔴 The summary and the service name are in the same DNS tag (hyphenated), not a separate paragraph.
+      # The listener wildcard of the Gateway API only matches a single tag (`*` exclusive to the first tag, specification
+      # Plaintext): The following `*.<suffix>` matches `a.<suffix>`, but **does not match** `a.b.<suffix>`.
+      # This is especially true for real domain names - `*.*.apps.example.com` is a two-level wildcard that most DNS service providers
+      # Not supported. The host_for of sites/exposure.py and this together form the same contract.
+      #
+      # When changing to self-built wildcard DNS, change SITES_DOMAIN_SUFFIX and the hostname here. The two must be synchronized.
+      # (GatewayManifestContractTest pinned).
+      hostname: "*.127.0.0.1.sslip.io"
+      allowedRoutes:
+        # 🔴 Must be Selector instead of Same: HTTPRoute is built in the **tenant** Namespace,
+        # And Gateway is in sites-gateway. Leaving it as the default Same will cause every tenant route to be
+        # Silent rejection - NotAllowedByListeners is written in the status of HTTPRoute, but the site side
+        # The performance is just "not accessible", there will be nothing pointing here.
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              # The tenant Namespace is tagged with this tag by common.namespace_resource.
+              sites.local/managed: "true"
+        kinds:
+          - kind: HTTPRoute
+
+{{- end }}

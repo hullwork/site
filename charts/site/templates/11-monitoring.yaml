@@ -1,0 +1,361 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sites-prometheus
+  namespace: {{ .Values.namespaces.control }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sites-local-prometheus
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["endpoints", "pods", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sites-local-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: sites-prometheus
+    namespace: {{ .Values.namespaces.control }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sites-local-prometheus
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sites-prometheus-config
+  namespace: {{ .Values.namespaces.control }}
+data:
+  # Both keys land in the same directory: the Deployment mounts this ConfigMap
+  # whole at /etc/prometheus (no subPath), so a new key is a new file next to
+  # prometheus.yml. Do not switch to subPath mounts - that would silently drop
+  # every key except the one named, and rule_files below would point at nothing.
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    # Absolute path on purpose: Prometheus resolves relative rule_files against
+    # the directory of --config.file, which is the same place, but the absolute
+    # form lets test_monitoring.py tie this line to the volumeMount instead of
+    # to loader behaviour.
+    rule_files:
+      - /etc/prometheus/sites-alerts.yml
+    scrape_configs:
+      - job_name: sites-prometheus
+        static_configs:
+          - targets: ["127.0.0.1:9090"]
+      - job_name: sites-api-local
+        static_configs:
+          - targets: [{{ printf "sites-api.%s.svc:8080" .Values.namespaces.control | quote }}]
+      - job_name: sites-operator-local
+        static_configs:
+          - targets: [{{ printf "sites-operator-metrics.%s.svc:9090" .Values.namespaces.control | quote }}]
+      # The activator serves /metrics on its admin port (see AdminHandler in
+      # src/sites/activator.py), which 09-activator.yaml exposes as Service
+      # port "admin" and whose NetworkPolicy admits this Prometheus by label.
+      - job_name: sites-activator-local
+        static_configs:
+          - targets: [{{ printf "sites-activator.%s.svc:9090" .Values.namespaces.control | quote }}]
+      - job_name: sites-envoy-gateway-local
+        metrics_path: /stats/prometheus
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace]
+            regex: envoy-gateway-system
+            action: keep
+          - source_labels: [__meta_kubernetes_service_name]
+            regex: envoy-sites-gateway-sites-gateway-.+
+            action: keep
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            regex: metrics
+            action: keep
+      - job_name: sites-kubelet-cadvisor
+        scheme: https
+        authorization:
+          credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+  # Alert rules for the three control-plane processes. Metric names must match
+  # the registrations in src/sites/*.py exactly; test_monitoring.py cross-checks
+  # every sites_* name used below against those registrations, because a typo
+  # here never errors - the rule just evaluates to an empty vector forever.
+  # Descriptions only interpolate fixed-cardinality labels (dependency,
+  # outcome, job, instance): no tenant or site identifiers exist on these
+  # series and none may be introduced through annotations.
+  sites-alerts.yml: |
+    groups:
+      - name: sites-control-plane
+        rules:
+          # `up` is the only signal that survives the process dying: every
+          # sites_* series simply disappears with it. The job regex is kept in
+          # sync with scrape_configs by test_monitoring.py.
+          - alert: SitesControlPlaneTargetDown
+            expr: up{job=~"sites-(api|operator|activator).*"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Sites control-plane scrape target is down"
+              description: "Prometheus cannot scrape {{ "{{" }} $labels.job }} ({{ "{{" }} $labels.instance }}) for 2 minutes."
+          # The L7 data plane. Envoy's own /stats/prometheus is scraped by
+          # job sites-envoy-gateway-local (below); up == 0 means no ready envoy
+          # pod stands behind the gateway Service. That is how every public site
+          # goes dark while every sites_* series stays green: the control plane
+          # is healthy and only the data plane is gone. This readiness-only
+          # death shape appears in no other metric - once it ran for 15 hours
+          # unnoticed. Silent whenever at least one envoy pod is Ready, however
+          # slow it is; latency is not what this rule is for.
+          # Owned here rather than by a consumer of this platform: the gateway
+          # is a component of this repository, so its alert ships with it. A
+          # rule living in someone else's monitoring stack is a rule this
+          # repository cannot ship, test, or keep in step with its own metrics.
+          - alert: SitesGatewayDown
+            expr: up{job=~"sites-envoy-gateway.*"} == 0
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Sites L7 gateway has no ready data plane"
+              description: "Prometheus cannot scrape {{ "{{" }} $labels.job }} ({{ "{{" }} $labels.instance }}) for 5 minutes: no ready envoy pod is behind the gateway Service and every public site entry is down or about to be."
+          # DependencyHealth flips this to 0 on the first failed use; the API
+          # keeps answering, so /readyz alone would not show it.
+          - alert: SitesApiDependencyDown
+            expr: sites_api_dependency_up == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Sites API dependency is failing"
+              description: "Dependency {{ "{{" }} $labels.dependency }} has been failing on the API's most recent use for 2 minutes."
+          # The snapshot sync thread swallows its own failures; a growing age is
+          # the only externally visible symptom. The gauge is first written after
+          # the first *successful* sync, so a process that never synced has no
+          # series at all - the `unless` branch catches that case while the API
+          # itself is healthy enough to be scraped.
+          - alert: SitesApiSnapshotStale
+            expr: |
+              sites_api_snapshot_age_seconds > 300
+              or (up{job="sites-api-local"} == 1 unless sites_api_snapshot_age_seconds)
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Sites API database snapshot is stale"
+              description: "The API's Kubernetes/database snapshot has not synced successfully for more than 5 minutes (age {{ "{{" }} $value | humanizeDuration }})."
+          # The gauge starts at 0, so a freshly started operator that never
+          # finishes a sweep also fires (time() - 0 is huge), which is the
+          # intended reading. When sites_operator_last_progress_timestamp_seconds
+          # lands, take max() over both so a long sweep that is still making
+          # progress does not page.
+          - alert: SitesOperatorSweepStale
+            expr: time() - sites_operator_last_sweep_timestamp_seconds > 300
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Sites operator has not completed a sweep"
+              description: "The operator's last completed reconcile sweep is more than 5 minutes old; custom resources are not being reconciled."
+          - alert: SitesTraceExportDrops
+            expr: increase(sites_tracing_export_total{outcome=~"dropped_.*"}[10m]) > 0
+            for: 0m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Sites trace exporter is dropping spans"
+              description: "{{ "{{" }} $value | humanize }} spans were dropped with outcome={{ "{{" }} $labels.outcome }} in the last 10 minutes; application traffic is deliberately unaffected."
+      - name: sites-activator
+        rules:
+          # Every non-success wake means a visitor got the error/holding page
+          # instead of their site. Label values are the fixed set ensured at
+          # import time, so `outcome` is safe to surface.
+          - alert: SitesActivatorWakeFailures
+            expr: increase(sites_activator_wakes_total{outcome!="success"}[10m]) > 0
+            for: 0m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Sites activator cold starts are failing"
+              description: "{{ "{{" }} $value | humanize }} cold starts ended with outcome={{ "{{" }} $labels.outcome }} in the last 10 minutes."
+          # The activator exposes no route-table-age gauge (only /healthz reads
+          # it, which Prometheus does not scrape), and process death is already
+          # covered by SitesControlPlaneTargetDown. The remaining activator-only
+          # health signal is the forwarding plane: timeout/error are the
+          # activator's own failures, while unknown_host, upgrade_refused,
+          # request_too_large and bad_request are caller-side and excluded.
+          # If a route-age gauge is added, prefer it over this expression.
+          - alert: SitesActivatorUnhealthy
+            expr: increase(sites_activator_requests_total{outcome=~"timeout|error"}[10m]) > 0
+            for: 0m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Sites activator is failing to forward requests"
+              description: "{{ "{{" }} $value | humanize }} forwarded requests ended with outcome={{ "{{" }} $labels.outcome }} in the last 10 minutes."
+          # The process stays up and keeps forwarding from its last good table while
+          # the apiserver is unreachable (readiness no longer goes red for that), so
+          # the only signal that new or deleted sites are not being picked up is the
+          # table age. -1 means never refreshed since start.
+          - alert: SitesActivatorRouteTableStale
+            expr: sites_activator_route_age_seconds > 300 or sites_activator_route_age_seconds < 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Sites activator route table is not refreshing"
+              description: "The activator has not refreshed its route table from the apiserver for more than 5 minutes; new scale-to-zero sites will 404 until it does."
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sites-prometheus
+  namespace: {{ .Values.namespaces.control }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sites-prometheus
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-prometheus
+    app.kubernetes.io/part-of: sites
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sites-prometheus
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sites-prometheus
+        app.kubernetes.io/part-of: sites
+    spec:
+      serviceAccountName: sites-prometheus
+      enableServiceLinks: false
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prometheus
+          image: {{ include "site.image" (list .Values.images.prometheus) }}
+          imagePullPolicy: {{ .Values.images.prometheus.pullPolicy }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=24h
+            - --storage.tsdb.retention.size=900MB
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 75m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+      volumes:
+        - name: config
+          configMap:
+            name: sites-prometheus-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: sites-prometheus
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sites-prometheus
+  namespace: {{ .Values.namespaces.control }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sites-prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sites-prometheus-ingress
+  namespace: {{ .Values.namespaces.control }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sites-prometheus
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sites-api
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sites-prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+
+{{- end }}

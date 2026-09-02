@@ -1,0 +1,540 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sitedeployments.sites.local
+spec:
+  group: sites.local
+  scope: Namespaced
+  names:
+    plural: sitedeployments
+    singular: sitedeployment
+    kind: SiteDeployment
+    shortNames:
+      - sd
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Service
+          type: string
+          jsonPath: .spec.serviceName
+        - name: URL
+          type: string
+          jsonPath: .status.url
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - merchantID
+                - userID
+                - serviceName
+                - image
+                - port
+                - healthPath
+                - replicas
+                # nodePort is not in required: CR under Gateway backend deliberately does not include this
+                # Fields (common.py see the nodePort comment), required will make
+                # Creation of gateway pattern all 422. The NodePort backend is required by the API
+                # The access layer guarantees (allocation logic is written in place) without relying on schema.
+              properties:
+                # The identity is two parts (merchant, user), both parts must fall on the spec: operator
+                # Only CR is obtained, and there is no other place to ask who the merchant is when deriving the Namespace.
+                # If a section is missing, you can only fall back to a single merchant Namespace, which is exactly the cross-tenant coverage you need to prevent.
+                merchantID:
+                  type: string
+                  minLength: 1
+                  maxLength: 31
+                  pattern: "^[a-z0-9][a-z0-9-]*$"
+                userID:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                serviceName:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                image:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                port:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
+                healthPath:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  pattern: "^/[^[:space:]]*$"
+                replicas:
+                  type: integer
+                  enum:
+                    - 1
+                # Opt-in scale-to-zero. Deployment's .spec.replicas after opening
+                # Managed by the external scalator (KEDA), the operator no longer writes it back every round - otherwise
+                # The cycle of "shrunk to 0 → reiterated in the next round → shrunk again".
+                #
+                # The replicas above is still 1 and is not released: it says "how many replicas are running when active?"
+                # "Copy" and "Can it shrink to 0 when idle" are two different things. The single copy assumes no change.
+                #
+                # Only accepted under L7 entrance (SITES_EXPOSURE_BACKEND=gateway), NodePort
+                # Direct API rejection: That topology DNATs external traffic directly to the site Pod,
+                # After shrinking to 0, no link can receive the request and trigger wake-up.
+                scaleToZero:
+                  type: boolean
+                # Container memory upper limit override, default 512Mi (DEFAULT_MEMORY_LIMIT of common.py,
+                # 128Mi–2Gi verified at the API admission layer). Node applications like n8n are too slow to initialize.
+                # By default, not giving an exit means disabling deployment.
+                memoryLimit:
+                  type: string
+                  pattern: '^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi)$'
+                  maxLength: 8
+                # The upper limit of the total resources of this tenant Namespace. Fill in by merchant from sites-api,
+                # The operator writes ResourceQuota accordingly - the operator is not connected to the database, and is based on the merchant
+                # The graded value can only be brought over via CR.
+                #
+                # 🔴 The value of all CRs under the same tenant name must be consistent: ResourceQuota is
+                # Namespace-level copy, and each site reconcile will write it. When inconsistent
+                # The two sites will overwrite back and forth, and the phenomenon is that the quota jumps between the two numbers. When changing quota
+                # sites-api is responsible for propagating to all CRs that the merchant already has.
+                tenantQuota:
+                  type: object
+                  properties:
+                    cpu:
+                      type: string
+                    memory:
+                      type: string
+                    pods:
+                      type: string
+                # The public route is allocated from the port pool and is no longer a fixed one. The control plane is accepting
+                # This value is written in place when requesting, and anything given by the caller will be overwritten.
+                nodePort:
+                  type: integer
+                  minimum: 30000
+                  maximum: 32767
+                # Only general workloads and direct static stations are distinguished. Application identity is no longer expressed by role,
+                # For specific configuration, go to env/secretMounts/runAsUser below.
+                componentRole:
+                  type: string
+                  enum:
+                    - app
+                    - static
+                runAsUser:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
+                livenessPath:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  pattern: "^/[^[:space:]]*$"
+                # Shape aligned with Kubernetes EnvVar: plaintext value only holds non-sensitive configuration,
+                # The secretKeyRef refers to the existing Secret in the Namespace.
+                env:
+                  type: array
+                  maxItems: 32
+                  items:
+                    type: object
+                    required:
+                      - name
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                        pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+                      value:
+                        type: string
+                        maxLength: 4096
+                      valueFrom:
+                        type: object
+                        properties:
+                          secretKeyRef:
+                            type: object
+                            required:
+                              - name
+                              - key
+                            properties:
+                              name:
+                                type: string
+                                minLength: 1
+                                maxLength: 253
+                              key:
+                                type: string
+                                minLength: 1
+                                maxLength: 253
+                secretMounts:
+                  type: array
+                  maxItems: 4
+                  items:
+                    type: object
+                    required:
+                      - secretName
+                      - mountPath
+                    properties:
+                      secretName:
+                        type: string
+                        minLength: 1
+                        maxLength: 253
+                      mountPath:
+                        type: string
+                        minLength: 1
+                        maxLength: 256
+                        pattern: "^/[^[:space:]]*$"
+                      items:
+                        type: array
+                        maxItems: 16
+                        items:
+                          type: object
+                          required:
+                            - key
+                            - path
+                          properties:
+                            key:
+                              type: string
+                              minLength: 1
+                              maxLength: 253
+                            path:
+                              type: string
+                              minLength: 1
+                              maxLength: 121
+                exposure:
+                  type: string
+                  enum:
+                    - public
+                    - internal
+                bundleName:
+                  type: string
+                  maxLength: 63
+                revision:
+                  type: string
+                  minLength: 1
+                  maxLength: 32
+                siteVersion:
+                  type: integer
+                  minimum: 1
+                database:
+                  type: object
+                  required:
+                    - schema
+                    - controlSecretName
+                    - secretName
+                  properties:
+                    schema:
+                      type: string
+                      pattern: "^site_[a-f0-9]{32}$"
+                    controlSecretName:
+                      type: string
+                      pattern: "^site-db-[a-f0-9]{24}$"
+                    secretName:
+                      type: string
+                      pattern: "^site-db-[a-f0-9]{24}$"
+                # Direct source code delivery: Static site content in Workspace is delivered with CR, operator
+                # Based on this, create a ConfigMap in the workload Namespace and mount it to the site of the runtime mirror.
+                # Directory. The CR itself is the only source of truth, and the API therefore does not require cross-namespace write permissions.
+                # Only applicable to static resources; builder + registry is still required when building images in any language.
+                artifact:
+                  type: object
+                  required:
+                    - files
+                    - sha256
+                  properties:
+                    files:
+                      type: object
+                      # The key is a relative path (without /) and the value is the file content. Content is shipped with HTTP, CR and
+                      # ConfigMap copy; API side press 60KiB content / 64KiB request early rejection.
+                      additionalProperties:
+                        type: string
+                      maxProperties: 64
+                    sha256:
+                      type: string
+                      pattern: "^[a-f0-9]{64}$"
+                # Immutable static content stored in S3/OSS. The operator copies
+                # only downloader credentials to the tenant Namespace; the
+                # resulting Secret name and values never become part of this CR.
+                staticArtifact:
+                  type: object
+                  required:
+                    - sourcePath
+                    - sha256
+                  properties:
+                    sourcePath:
+                      type: string
+                      minLength: 1
+                      maxLength: 512
+                      pattern: "^[^/[:space:]][^[:space:]]*/[a-f0-9]{64}$"
+                    sha256:
+                      type: string
+                      pattern: "^[a-f0-9]{64}$"
+                    # Optional override for the control-plane Secret. When
+                    # omitted, the operator's configured object-storage Secret
+                    # is used. Only its name is stored;
+                    # credential material remains in Kubernetes Secrets.
+                    controlSecretName:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      pattern: "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Deploying
+                    - Running
+                    - Failed
+                message:
+                  type: string
+                  maxLength: 512
+                ready:
+                  type: boolean
+                observedGeneration:
+                  type: integer
+                  format: int64
+                startedAt:
+                  type: string
+                  format: date-time
+                # The current expected number of replicas of the Deployment in the cluster (a field managed by the external scaler,
+                # operator is just an observer). reconcile compares it with the last record, the changes are
+                # Scaling event - used to reset startedAt, see operator.reconcile.
+                observedReplicas:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                image:
+                  type: string
+                serviceName:
+                  type: string
+                namespace:
+                  type: string
+                port:
+                  type: integer
+                url:
+                  type: string
+                # The content-addressed hash of the direct content, combined with the verification response hash below
+                # A chain of evidence of "what was submitted / what actually ran".
+                artifactSha256:
+                  type: string
+                  pattern: "^[a-f0-9]{64}$"
+                # A real request initiated by the control plane itself. It is not self-reported by the agent, nor
+                # Kubernetes' readiness judgment - that is the ready above.
+                verification:
+                  type: object
+                  properties:
+                    checkedAt:
+                      type: string
+                      format: date-time
+                    revision:
+                      type: string
+                      maxLength: 32
+                    url:
+                      type: string
+                      maxLength: 512
+                    ok:
+                      type: boolean
+                    httpStatus:
+                      type: integer
+                    bodyBytes:
+                      type: integer
+                    bodySha256:
+                      type: string
+                      pattern: "^[a-f0-9]{64}$"
+                    error:
+                      type: string
+                      maxLength: 200
+{{- if ne .Values.namespaces.control .Release.Namespace }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/part-of: sites
+    # Rootless BuildKit needs the upstream unconfined seccomp/AppArmor profile
+    # for its user-namespace helper. Workloads remain explicitly hardened, but
+    # this local preview namespace cannot enforce the Restricted PSS profile.
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+{{- end }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: sitebuilds.sites.local
+spec:
+  group: sites.local
+  scope: Namespaced
+  names:
+    plural: sitebuilds
+    singular: sitebuild
+    kind: SiteBuild
+    shortNames:
+      - sb
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Service
+          type: string
+          jsonPath: .spec.serviceName
+        - name: Image
+          type: string
+          jsonPath: .status.image
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - merchantID
+                - userID
+                - serviceName
+                - sourcePath
+                - artifactSha256
+                - dockerfile
+                - repository
+                - tag
+                - port
+                # nodePort is the same as above: it is not included in the Gateway backend and is not required.
+                - healthPath
+                - revision
+              properties:
+                merchantID:
+                  type: string
+                  minLength: 1
+                  maxLength: 31
+                  pattern: "^[a-z0-9][a-z0-9-]*$"
+                userID:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  pattern: "^[a-z0-9][a-z0-9-]*$"
+                serviceName:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                sourcePath:
+                  type: string
+                  minLength: 3
+                  maxLength: 320
+                sourceStorage:
+                  type: string
+                  enum:
+                    - pvc
+                    - oss
+                artifactSha256:
+                  type: string
+                  pattern: "^[a-f0-9]{64}$"
+                dockerfile:
+                  type: string
+                  enum:
+                    - Dockerfile
+                repository:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                tag:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                port:
+                  type: integer
+                  minimum: 1
+                  maximum: 65535
+                nodePort:
+                  type: integer
+                  minimum: 30000
+                  maximum: 32767
+                healthPath:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  pattern: "^/[^[:space:]]*$"
+                revision:
+                  type: string
+                  minLength: 1
+                  maxLength: 32
+                buildOnly:
+                  type: boolean
+                  default: false
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - Building
+                    - Deploying
+                    - Running
+                    - Failed
+                message:
+                  type: string
+                  maxLength: 512
+                ready:
+                  type: boolean
+                observedGeneration:
+                  type: integer
+                  format: int64
+                startedAt:
+                  type: string
+                  format: date-time
+                jobName:
+                  type: string
+                artifactSha256:
+                  type: string
+                imageDigest:
+                  type: string
+                image:
+                  type: string
+                url:
+                  type: string
+                # Mirror the resulting SiteDeployment's evidence so build clients can
+                # use one acceptance criterion instead of polling two resources.
+                verification:
+                  type: object
+                  properties:
+                    checkedAt:
+                      type: string
+                      format: date-time
+                    revision:
+                      type: string
+                      maxLength: 32
+                    url:
+                      type: string
+                      maxLength: 512
+                    ok:
+                      type: boolean
+                    httpStatus:
+                      type: integer
+                    bodyBytes:
+                      type: integer
+                    bodySha256:
+                      type: string
+                      pattern: "^[a-f0-9]{64}$"
+                    error:
+                      type: string
+                      maxLength: 200

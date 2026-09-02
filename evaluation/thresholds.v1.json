@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "benchmarkVersion": "1.0.0",
+  "profiles": {
+    "contract": {
+      "minimumSuccessRate": 1.0,
+      "maximumFailed": 0,
+      "maximumBlocked": 0,
+      "maximumNotRun": 0
+    },
+    "cluster": {
+      "minimumValidTrials": 60,
+      "maximumFailed": 0,
+      "maximumBlocked": 0,
+      "maximumNotRun": 0,
+      "requiredRevisionMatchedVerificationRate": 1.0,
+      "requiredCleanupSuccessRate": 1.0,
+      "maximumStaticDeployP95Seconds": 120,
+      "maximumDynamicDeployP95Seconds": 600
+    }
+  }
+}

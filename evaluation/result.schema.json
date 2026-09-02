@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "benchmarkVersion", "runId", "profile", "startedAt", "finishedAt", "environment", "thresholds", "summary", "scoredStages", "unscoredStages", "valid", "passed"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "benchmarkVersion": {"type": "string", "minLength": 1},
+    "runId": {"type": "string", "format": "uuid"},
+    "profile": {"enum": ["contract", "cluster", "agent"]},
+    "startedAt": {"type": "string", "format": "date-time"},
+    "finishedAt": {"type": "string", "format": "date-time"},
+    "environment": {
+      "type": "object",
+      "required": ["gitCommit", "gitDirty", "python", "platform", "tools"],
+      "properties": {
+        "gitCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "gitDirty": {"type": "boolean"},
+        "python": {"type": "string"},
+        "platform": {"type": "string"},
+        "tools": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "thresholds": {"type": "object"},
+    "summary": {
+      "type": "object",
+      "required": ["passed", "failed", "blocked", "notRun", "successRate"],
+      "properties": {
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "blocked": {"type": "integer", "minimum": 0},
+        "notRun": {"type": "integer", "minimum": 0},
+        "successRate": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "scoredStages": {"type": "array", "items": {"type": "object"}},
+    "unscoredStages": {"type": "array", "items": {"type": "object"}},
+    "setup": {"type": "object"},
+    "trials": {"type": "array", "items": {"type": "object"}},
+    "cleanup": {"type": "object"},
+    "rawEvents": {"type": "array", "items": {"type": "object"}},
+    "latencyMs": {"type": "object"},
+    "valid": {"type": "boolean"},
+    "passed": {"type": "boolean"}
+  }
+}

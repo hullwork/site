@@ -1,0 +1,108 @@
+name: CodeQL
+
+# This repository had no static analysis at all until this workflow. Note the
+# gate step: without Advanced Security, upload-sarif 403s, so the pass/fail
+# decision has to be made here in the job. .github/codeql-gate.sh owns it, and
+# proves it can fail before it is trusted to pass.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # rule-prefixes: which allowlist entries this job is entitled to call
+          # stale. CodeQL rule ids are language-prefixed, and each job only
+          # analyses its own language, so without this every job would declare
+          # the other language's entries stale. Both jobs also analyse the
+          # workflow files, so `actions/` is assigned to exactly one of them.
+          - language: python
+            rule-prefixes: py/,actions/
+          - language: javascript-typescript
+            rule-prefixes: js/
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      # Runs before the analysis, so a gate that cannot fail is caught even on
+      # a clean scan. A sibling repository's identical gate passed for months
+      # with a jq program that did not compile.
+      - name: Prove the gate can fail
+        run: .github/codeql-gate.sh --self-test
+      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - id: analyze
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          upload: never
+          upload-database: false
+      # Findings below the gate threshold have nowhere else to surface, since
+      # the SARIF is never uploaded. Print them so they are at least readable.
+      - name: Summarize CodeQL results
+        shell: bash
+        env:
+          SARIF_DIR: ${{ steps.analyze.outputs.sarif-output }}
+        run: |
+          set -euo pipefail
+          jq -s -r '
+            [ .[] | .runs[] | . as $run
+              | ( [ $run.tool.driver.rules[]? ]
+                  + [ $run.tool.extensions[]?.rules[]? ] ) as $rules
+              | $run.results[]? | . as $result
+              | ( [ $rules[]
+                    | select(.id == $result.ruleId)
+                    | (.properties["security-severity"] // "0") | tonumber ]
+                  | max // 0 ) as $severity
+              | "\($result.ruleId)\t\($severity)"
+            ]
+            | "CodeQL findings: \(length)",
+              (group_by(.)[] | "  \(.[0]) x\(length)")
+          ' "$SARIF_DIR"/*.sarif
+      - name: Gate on high-severity CodeQL findings
+        shell: bash
+        env:
+          SARIF_DIR: ${{ steps.analyze.outputs.sarif-output }}
+          EVENT_NAME: ${{ github.event_name }}
+          RULE_PREFIXES: ${{ matrix.rule-prefixes }}
+        run: |
+          set -euo pipefail
+          # Only a run that saw the whole tree may call an allowlist entry
+          # stale. On pull_request, codeql-action fills CodeQL's
+          # `restrictAlertsTo` predicate from the PR diff, so every
+          # dataflow-based query reports alerts only on lines the PR touched --
+          # measured: a PR run here reported 1 finding where a full run reports
+          # 13. Leaving the stale check on would fire on nearly every PR, and a
+          # gate that cries wolf gets deleted. The push and schedule runs are
+          # not diff-informed and do check it.
+          #
+          # Written out in bash on purpose: in a GitHub expression,
+          # `cond && '' || X` always yields X, because the empty string is
+          # falsy. That ternary would silently disable this on every event.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            export CODEQL_GATE_STALE_SCOPE=""
+          else
+            export CODEQL_GATE_STALE_SCOPE="$RULE_PREFIXES"
+          fi
+          .github/codeql-gate.sh "$SARIF_DIR" .github/codeql-allowlist.tsv

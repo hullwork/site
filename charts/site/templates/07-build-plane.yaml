@@ -1,0 +1,445 @@
+{{- if .Values.buildPlane.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sites-builder
+  namespace: {{ .Values.namespaces.control }}
+automountServiceAccountToken: false
+---
+# There is no quota before the build: loop POST /v1/builds and change name to put N 1 CPU/1Gi
+# Jobs are queued to a single node at the same time, squeezing out sites-api / operator / postgres together - control
+# Hang up by yourself. count/jobs.batch takes 6 instead of the concurrency limit of 3 because the completed Job has to wait
+# It will disappear after ttlSecondsAfterFinished(600s), otherwise it will be stuck for ten minutes after three consecutive builds. API side
+# SITES_MAX_ACTIVE_BUILDS is the concurrency gate, and here is the last step. pods reserves room for six resident
+# control-plane Pods, up to six retained build Pods, and three verification Pods; keeping it at 12 makes
+# the final verification stage fail exactly when the retained-job allowance is being used.
+#
+# Deliberately not set ephemeral-storage quota (e27bcad version has it, along with duplicate objects by 417b9cb
+# Leave it as a suggestion when withdrawing): ① Each build job has declared 2Gi ephemeral limits.
+# (sites/builds.py), superimposing the upper limit of jobs.batch above, the total amount is naturally bounded; ② Once quota
+# After a resource is declared, Pods in the namespace that do not declare it will be directly rejected, and the following one
+# LimitRange only covers cpu/memory, and none of the four resident components have written ephemeral - one less step.
+# The entire control plane cannot rise, which is a more serious problem than the problem it is intended to prevent. To add it, you must change quota and LimitRange at the same time.
+# And it needs to be verified once on the real Lima/Kubernetes topology.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: sites-build-plane
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/part-of: sites
+spec:
+  hard:
+    pods: "15"
+    count/jobs.batch: "6"
+    requests.cpu: "2"
+    requests.memory: 2Gi
+    limits.cpu: "8"
+    limits.memory: 8Gi
+---
+# Once the above ResourceQuota declares requests/limits, any Pod in the namespace that does not write resources
+# will be rejected directly. The default value is given here, so that "the new list forgot to write limits" degenerates into using the default amount.
+# It's not that the control plane component cannot be started. Existing components all come with requests/limits, so this default value is currently
+# No Pods will be hit.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: sites-build-plane-defaults
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/part-of: sites
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 50m
+        memory: 64Mi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sites-sources
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/part-of: sites
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sites-registry
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/part-of: sites
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+# L7 proxied frontend of registry.
+#
+# BuildKit pushes and tenant Dockerfile RUN instructions share one network namespace.
+# NetworkPolicy cannot separate those flows, so this L7 proxy authenticates writes and
+# enumeration while leaving the node-facing pull path anonymous. A caller that guesses a
+# repository name can still pull it; global registry authentication would be required to
+# remove that residual risk.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sites-registry-proxy
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-registry
+    app.kubernetes.io/part-of: sites
+data:
+  nginx.conf: |
+    worker_processes 1;
+    error_log /dev/stderr warn;
+    pid /tmp/nginx.pid;
+    events { worker_connections 256; }
+    http {
+      access_log off;
+      # There is no upper limit on the size of the image layer: 0 = No limit on the request body. The default value of 1m will cause push to transfer the first layer
+      # Just 413, and buildctl reported a general failed to push.
+      client_max_body_size 0;
+      # All five temp paths explicitly point to /tmp. nginx will create these directories when it starts,
+      # Even the corresponding modules are not used at once (fastcgi/uwsgi/scgi are not used here). If you don’t write it
+      # They fall under /var/cache/nginx that comes with the image, readOnlyRootFilesystem + non-root
+      # Directly mkdir Permission denied under the user, nginx can't get up - hang up emptyDir
+      # It's possible to do it on top, but that depends on the Pod's fsGroup changing the owner exactly, which is an implicit dependency.
+      client_body_temp_path /tmp/client_body;
+      proxy_temp_path /tmp/proxy;
+      fastcgi_temp_path /tmp/fastcgi;
+      uwsgi_temp_path /tmp/uwsgi;
+      scgi_temp_path /tmp/scgi;
+      proxy_request_buffering off;
+      proxy_http_version 1.1;
+      # 🔴 Host must transparently transmit the one used by the client. registry uses it to construct blob upload
+      # Location (response to POST /blobs/uploads/), nginx transmits the upstream address by default
+      # (127.0.0.1:5010), after the client gets it, it will connect to a port that only exists inside the Pod and push
+      # Stuck in "connect: connection refused" and retrying repeatedly - 2026-08-19 Local test.
+      proxy_set_header Host $http_host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+
+      # ── 5000: Node surface. hostPort refers here, containerd on the node pulls the image anonymously.
+      #
+      # This side **does not accept authentication and does not issue authentication challenges**: read-only release, write and enumeration are all 403.
+      # 403 instead of 401 is deliberate - 401 will make the client think "just fill in the credentials and you can write", which is
+      # One side does not accept any writing in terms of design, and giving challenges is equivalent to giving a non-existent path.
+      server {
+        listen 5000;
+        server_name _;
+        location = /v2/ { proxy_pass http://127.0.0.1:5010; }
+        location ~ ^/v2/.+/(manifests|blobs)/ {
+          limit_except GET HEAD { deny all; }
+          proxy_pass http://127.0.0.1:5010;
+        }
+        # /v2/_catalog and /v2/<name>/tags/list both fall here: the node does not need to pull the image
+        # Enum, which only takes manifests and blobs by name.
+        location / { deny all; }
+      }
+
+      # ── 5002: Control plane/construction surface. The targetPort of Service refers here.
+      #
+      # Basic authentication is required throughout, **including /v2/ detection**. This item cannot be omitted: docker and buildkit
+      # The authentication negotiation is determined in the step of ping /v2/, ping returns 200 without
+      # WWW-Authenticate, the client will record this registry as "no authentication required", even if it receives
+      # 401 will not replenish the credentials, let alone renegotiate - 2026-08-19 Local test: The credentials are clearly there
+      # In the docker config, 401 also contains the correct challenge, and the push still fails with 401.
+      # This is why proxying can only be switched by **entry**, not by method on the same entrance.
+      server {
+        listen 5002;
+        server_name _;
+        auth_basic "sites registry";
+        auth_basic_user_file /etc/nginx/auth/htpasswd;
+        location / { proxy_pass http://127.0.0.1:5010; }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sites-registry
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-registry
+    app.kubernetes.io/part-of: sites
+spec:
+  replicas: 1
+  # hostPort 5000 can only be held by one Pod on a worker node. The
+  # default RollingUpdate creates the replacement before deleting the old Pod,
+  # which deadlocks every registry rollout in Pending.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sites-registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sites-registry
+        app.kubernetes.io/part-of: sites
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        # 🔴The registry only listens to 127.0.0.1. The loopback in a Pod is only a container of the same Pod
+        # OK, so "bypassing the proxy and connecting directly to the registry" does not hold true at the network layer - this is proxying.
+        # The premise is established, changing it back to 0.0.0.0 is equivalent to bypassing the entire authentication, and no errors will be reported.
+        - name: registry
+          image: {{ include "site.image" (list .Values.images.registry) }}
+          imagePullPolicy: {{ .Values.images.registry.pullPolicy }}
+          env:
+            - name: REGISTRY_HTTP_ADDR
+              value: 127.0.0.1:5010
+            # 🔴 registry 3.x comes with a debug server (/metrics and pprof), the default
+            # Listening:5001 - is 0.0.0.0, not loopback. If loopback is not explicitly closed,
+            # After the main service was reduced to 127.0.0.1, it became the only external listening port on this Pod.
+            # It doesn't provide a registry API, so it's not a proxying bypass, but there's no reason to leave it exposed.
+            # (The default value of 5001 will also collide with the main service port - 2026-08-19 Local container testing,
+            # When the main service is set to 127.0.0.1:5001, directly bind: address already in use. )
+            - name: REGISTRY_HTTP_DEBUG_ADDR
+              value: 127.0.0.1:5011
+            - name: REGISTRY_STORAGE_DELETE_ENABLED
+              value: "true"
+          # No httpGet probe: kubelet detects the Pod IP from the node, and this process is only in loopback
+          # On. Readiness and liveness are represented end-to-end by the proxy container - its /v2/ will actually be forwarded here,
+          # If the registry is down, it will be 502, and the probe will still turn red.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/registry
+            - name: tmp
+              mountPath: /tmp
+        # Node-facing read-only proxy. The hostPort remains for the local Lima topology;
+        # general deployments use the pull Service below.
+        - name: proxy
+          image: {{ include "site.image" (list .Values.images.nginx) }}
+          imagePullPolicy: {{ .Values.images.nginx.pullPolicy }}
+          ports:
+            # Node plane: Service pull points here; keep hostPort compatible with the Lima topology.
+            - name: registry
+              containerPort: 5000
+              hostPort: 5000
+            # Cluster side: Service refers here, and the entire side needs to be authenticated. Deliberately not giving hostPort ——
+            # There is no reason for the authentication side to appear on the node address.
+            - name: authenticated
+              containerPort: 5002
+          readinessProbe:
+            httpGet:
+              path: /v2/
+              port: registry
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /v2/
+              port: registry
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: proxy-auth
+              mountPath: /etc/nginx/auth
+              readOnly: true
+            # Under readOnlyRootFilesystem, nginx needs to write pid and five temp paths in the configuration.
+            # Already pointed them all here.
+            - name: proxy-tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sites-registry
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: proxy-config
+          configMap:
+            name: sites-registry-proxy
+        - name: proxy-auth
+          secret:
+            secretName: {{ .Values.existingSecrets.registry.name }}
+            items:
+              - key: {{ .Values.existingSecrets.registry.htpasswdKey }}
+                path: htpasswd
+        - name: proxy-tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sites-registry
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-registry
+spec:
+  selector:
+    app.kubernetes.io/name: sites-registry
+  ports:
+    # Authenticated cluster-facing plane for pushes and administrative reads.
+    - name: registry
+      port: 5000
+      targetPort: authenticated
+    # Anonymous read-only entry for node containerd.
+    - name: pull
+      port: 5001
+      targetPort: registry
+---
+# Only builders, the operator, and node-originated probes/pulls may reach the registry.
+# Node traffic is outside the Pod CIDR and therefore requires the broad ipBlock with the
+# Pod CIDR excluded.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sites-registry
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-registry
+    app.kubernetes.io/part-of: sites
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sites-registry
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sites-builder
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sites-operator
+        # The "Build and Mirror" page of the management console should list /v2/_catalog and the tags of each repo.
+        # sites-api only performs read-only queries and does not push or delete - but the registry has no authentication, so releasing it is equivalent to giving away
+        # It has all the capabilities, so what is put here is "one more required caller", not to release the network segment.
+        # This symptom is missing: the registry pod is healthy, the service is available, and curl is available from its own container.
+        # Only the sites-api connection times out (not refused - the packet was lost by netpol), and the health page displays
+        # "Registry unreachable" while the cluster appears to be fine.
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sites-api
+      ports:
+        - protocol: TCP
+          # What NetworkPolicy sees after Service DNAT is the Pod's authentication port.
+          port: 5002
+    - from:
+        # containerd on the node accesses the anonymous read-only surface through pull service; Pod network segment is excluded
+        # Ensure that ordinary workloads cannot bypass the authentication plane.
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - {{ required "clusterNetwork.podCIDR is required: it is the Pod network of the target cluster, and these rules are 'allow everything except it'. An unset or wrong value excludes nothing. See docs/CONFIGURATION.md." .Values.clusterNetwork.podCIDR }}
+      ports:
+        - protocol: TCP
+          port: 5000
+---
+# Tenant Dockerfile RUN instructions execute arbitrary code. Builder egress is limited
+# to DNS, the authenticated registry plane, and public HTTP/HTTPS for base images and
+# package downloads. The registry proxy and credential mount isolate buildctl's push
+# credentials from RUN instructions, but cannot prevent network access itself. The
+# cluster CIDRs and node-only ports remain excluded.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sites-builder
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-builder
+    app.kubernetes.io/part-of: sites
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sites-builder
+  policyTypes:
+    - Egress
+  egress:
+    # The target pushed by buildctl is sites-registry.sites-local.svc:5000, and the service name must be resolved first.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sites-registry
+      ports:
+        - protocol: TCP
+          # Service 5000 goes to Pod 5002 via targetPort: authenticated; Cilium
+          # The policy is executed after DNAT, so the target Pod port must be written here.
+          port: 5002
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            # Must stay identical to WORKLOAD_EGRESS_EXCEPT_CIDRS in
+            # src/sites/k8s_resources.py. The builder runs tenant-authored RUN
+            # instructions, the same threat model as a tenant workload, so it needs
+            # the same exclusions - without the link-local range a Dockerfile can
+            # simply curl 169.254.169.254 and read the node's cloud credentials.
+            # test_builds.py asserts the two lists match.
+            except:
+              - {{ required "clusterNetwork.podCIDR is required: it is the Pod network of the target cluster, and these rules are 'allow everything except it'. An unset or wrong value excludes nothing. See docs/CONFIGURATION.md." .Values.clusterNetwork.podCIDR }}
+              - 10.221.0.0/16
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+
+{{- end }}

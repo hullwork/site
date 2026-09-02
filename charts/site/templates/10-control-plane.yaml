@@ -1,0 +1,707 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sites-api
+  namespace: {{ .Values.namespaces.control }}
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sites-operator
+  namespace: {{ .Values.namespaces.control }}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sites-api
+  namespace: {{ .Values.namespaces.control }}
+rules:
+  # Per-site PostgreSQL credentials live in control-plane Secrets. The API
+  # never returns them to tenants or agents; production integrations may
+  # replace this with an external secret manager.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - patch
+  - apiGroups:
+      - sites.local
+    resources:
+      - sitedeployments
+      - sitebuilds
+    verbs:
+      - get
+      - list
+      - create
+      - patch
+      - delete
+  - apiGroups:
+      - sites.local
+    resources:
+      - sitedeployments/status
+      - sitebuilds/status
+    verbs:
+      - get
+      - patch
+  # /v1/admin/health needs to directly read the operator's readiness status. The next best thing is to use CR timestamp derivation
+  # If so, the meaning of reachable will change from "the operator is alive" to "I can read a certain signal", and in the cluster
+  # The field is empty when there is no CR - and "everything is fine" is indistinguishable on the page. The administrator is
+  # Only open this page when something goes wrong. A green light for semantic drift is worse than not being given a green light at all.
+  # Read-only, only in this Namespace: sites-api only needs the status of operators in the same namespace.
+  # Giving watch/patch or commissioning ClusterRole are beyond this purpose.
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sites-api
+  namespace: {{ .Values.namespaces.control }}
+subjects:
+  - kind: ServiceAccount
+    name: sites-api
+    namespace: {{ .Values.namespaces.control }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sites-api
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sites-operator-resources
+  namespace: {{ .Values.namespaces.control }}
+rules:
+  - apiGroups:
+      - sites.local
+    resources:
+      - sitedeployments
+      - sitebuilds
+    verbs:
+      - get
+      - list
+      - create
+      - patch
+      - delete
+  - apiGroups:
+      - sites.local
+    resources:
+      - sitedeployments/status
+      - sitebuilds/status
+    verbs:
+      - get
+      - patch
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+    verbs:
+      - get
+      - list
+      - create
+      - delete
+  # Cross-namespace reference permissions for activators. Use Role instead of ClusterRole: this
+  # ReferenceGrant is fixed in the control plane ns (the side of the referenced party), and the operator does not need to be elsewhere
+  # Build it. Rewritten each round by the current STZ site's Namespace collection - its from.namespace only accepts
+  # The specific name does not support wildcards or selectors, and the tenant ns is dynamically created and cannot be written in the static list.
+  # "all tenants ns".
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - referencegrants
+    verbs:
+      - get
+      - create
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sites-operator-resources
+  namespace: {{ .Values.namespaces.control }}
+subjects:
+  - kind: ServiceAccount
+    name: sites-operator
+    namespace: {{ .Values.namespaces.control }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sites-operator-resources
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sites-local-operator
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - create
+      - patch
+  # Each tenant Namespace establishes a total resource gate, which has the same life cycle as the Namespace.
+  - apiGroups:
+      - ""
+    resources:
+      - resourcequotas
+    verbs:
+      - get
+      - create
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - services
+    verbs:
+      - get
+      - create
+      - patch
+      - delete
+  # The site content directly delivered from source code falls into the workload Namespace in the form of ConfigMap.
+  # Reconciled and recycled by the operator along with SiteDeployment.
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - create
+      - patch
+      - delete
+  # Versioned dynamic sites receive only their runtime PostgreSQL role, and
+  # versioned static sites receive only the two OSS downloader keys. Database
+  # reader credentials and all other control-plane Secret keys stay here.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - patch
+      - delete
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+      - create
+      - patch
+      - delete
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    verbs:
+      - get
+      - create
+      - patch
+      - delete
+  # Under the Gateway backend (SITES_EXPOSURE_BACKEND=gateway), the operator gives each public site a
+  # Create an HTTPRoute in the tenant Namespace. This set of permissions is not used under the NodePort backend, but is reserved.
+  # is harmless - without it, switching backends will get 403, and the symptom is "the site is built but cannot be accessed",
+  # The troubleshooting direction will first point to the gateway instead of RBAC.
+  # Do not give write permission to gateways: Gateway objects are platform facilities, which are built once by operation and maintenance.
+  # The operator only hangs routes up.
+  # KEDA’s scaling strategy. Like HTTPRoute, it is built in the tenant Namespace, so it is a ClusterRole.
+  - apiGroups:
+      - keda.sh
+    resources:
+      - scaledobjects
+    verbs:
+      - get
+      - list
+      - create
+      - patch
+      - delete
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - httproutes
+    verbs:
+      - get
+      - list
+      - create
+      - patch
+      - delete
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - gateways
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sites-local-operator
+subjects:
+  - kind: ServiceAccount
+    name: sites-operator
+    namespace: {{ .Values.namespaces.control }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sites-local-operator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sites-api
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-api
+    app.kubernetes.io/part-of: sites
+spec:
+  replicas: 1
+  # Correctness relies on a single copy: NodePort allocation, tenant quota check, build name check, the only mutual exclusion is
+  # In-process threading.Lock. The default RollingUpdate for replicas=1 is maxSurge=1,
+  # During the rolling update, the old and new processes coexist, each holding an unrelated lock - the three checks fail at the same time, and the symptoms
+  # It's an occasional double allocation/over-issuance, not an error. The registry of 07-build-plane.yaml has been changed due to hostPort
+  # With Recreate, the same reason holds true for "locked-in-process" singleton controllers.
+  # The price is a full outage on every rollout: Recreate stops the old Pod first, so
+  # the API is down for the graceful stop (SIGTERM, in-flight requests joined, up to
+  # terminationGracePeriodSeconds) plus the new Pod's image pull, database wait and
+  # first startupProbe pass. Acceptable for local Lima prototypes; not "a few seconds".
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sites-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sites-api
+        app.kubernetes.io/part-of: sites
+    spec:
+      serviceAccountName: sites-api
+      enableServiceLinks: false
+      # sites.api installs a SIGTERM handler (sites/shutdown.py) that stops accepting
+      # and joins in-flight requests; each request can wait up to
+      # SITES_MUTATION_LOCK_TIMEOUT (10s) on the mutation lock, so 30s leaves room
+      # for the preStop sleep, that wait and the response before kubelet SIGKILLs.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: {{ include "site.image" (list .Values.images.control) }}
+          # The image tag is fixed to :local and the content changes with each build, and must be based on the registry in the cluster;
+          # IfNotPresent, the old cache with the same name of node containerd will win, and the new image pushed up again will be silently invalid.
+          # (A rollout can otherwise be green while the node still runs the old image).
+          imagePullPolicy: {{ .Values.images.control.pullPolicy }}
+          command:
+            - python3
+            - -m
+            - sites.api
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            # Configuration of L7 ingress. Optional: This ConfigMap does not need to be used in deployments without gateway.
+            # exists. Without it, the Pod should not be unable to start - then all the default values are used, which is nodeport.
+            - configMapRef:
+                name: sites-exposure
+                optional: true
+            # The OSS source code backend is also a choice during deployment. If missing by default, source PVC will continue to be used.
+            - configMapRef:
+                name: sites-oss
+                optional: true
+            - configMapRef:
+                name: sites-tracing
+                optional: true
+          env:
+            # Basic authentication is required for the registry cluster (see 07-build-plane.yaml for proxied proxying).
+            # The user name is given to the environment variable and the password to go to the file: the environment variable will be entered into kubectl describe.
+            # It will also be printed out by any env in the same Pod.
+            - name: SITES_REGISTRY_USERNAME
+              value: sites
+            - name: SITES_CONTROL_NAMESPACE
+              value: {{ .Values.namespaces.control | quote }}
+            - name: SITES_HTTP_PORT
+              value: "8080"
+            - name: SITES_DB_HOST
+              value: {{ .Values.database.host | quote }}
+            # Tenant workloads run outside sites-local, so the runtime Secret
+            # must contain a cross-namespace address. The API keeps using the
+            # short control-plane Service name above for its own connections.
+            - name: SITES_DATA_DB_RUNTIME_HOST
+              value: {{ default (printf "sites-postgres.%s.svc.cluster.local" .Values.namespaces.control) .Values.database.runtimeHost | quote }}
+            - name: SITES_DB_PORT
+              value: {{ .Values.database.port | quote }}
+            - name: SITES_DB_NAME
+              value: {{ .Values.database.name | quote }}
+            - name: SITES_DB_USER
+              value: {{ .Values.database.user | quote }}
+            # Connection handshake bound. This is NOT a probe setting: DatabaseConfig
+            # applies it to every connection the API opens, so it is the global line
+            # between "slow" and "dead" for the database. At 1s one congested
+            # handshake on the request path already surfaces as StorageError (503)
+            # and as a /readyz failure; 5s (the code default) rides out that jitter
+            # while a dead peer still fails well within the client's 15s budget.
+            # Statements are bounded separately by SITES_DB_STATEMENT_TIMEOUT
+            # (default 10s) and TCP keepalives.
+            - name: SITES_DB_CONNECT_TIMEOUT
+              value: "5"
+            - name: SITES_DB_PASSWORD_FILE
+              value: /var/run/sites-db/password
+            # The bundled sites-postgres runs the stock image with no server
+            # certificate, so TLS is not on offer on this hop and the code default
+            # of "require" would refuse to connect. State that rather than let a
+            # negotiating mode arrive at the same plaintext connection quietly:
+            # this is one pod talking to another inside the cluster. Point
+            # SITES_DB_HOST at a managed database and drop this variable to get
+            # "require" back, or set "verify-full" once you have a CA to check.
+            - name: SITES_DB_SSLMODE
+              value: disable
+            # Signing key for admin console sessions. sites-api refuses to start
+            # without it, so the integration layer must add a `console-session-key`
+            # key (>=32 characters, different from `token`) to the configured
+            # API Secret. It is deliberately not derived from the service
+            # token: that token is handed to callers, and a signing key must not be
+            # a value anyone else holds.
+            - name: SITES_CONSOLE_SESSION_KEY_FILE
+              value: /var/run/sites/console-session-key
+            # No SITES_OIDC_* here: the reference deployment has no identity
+            # provider, so local login stays on by default and the console admin
+            # signs in with the service token. Configure SITES_OIDC_ISSUER,
+            # SITES_OIDC_CLIENT_ID, SITES_OIDC_REDIRECT_URL and SITES_OIDC_AUDIENCE
+            # together (a partial set refuses to start), after which local login
+            # turns itself off unless SITES_LOCAL_LOGIN_ENABLED=true keeps the
+            # break-glass door open.
+            # The static product of the management console is mirrored by the node stage of sites/Dockerfile.
+            # When the directory is not there, /console/ returns 503 instead of 404 - that means "the product has not been entered",
+            # It is completely opposite to the troubleshooting direction of "routing not configured".
+            - name: SITES_CONSOLE_ROOT
+              value: /app/console
+            # The MCP tool surface as a network endpoint (POST /mcp). It carries no
+            # authorization of its own: every tool call is re-presented as an ordinary
+            # authenticated /v1/* request using the caller's own credential, so turning
+            # it off narrows nothing an operator has not already narrowed on /v1/*. It
+            # is a switch for deployments that want a REST-only control plane.
+            - name: SITES_MCP_ENDPOINT_ENABLED
+              value: {{ .Values.mcpEndpoint.enabled | quote }}
+            - name: SITES_LOG_FORMAT
+              value: json
+            - name: SITES_PROMETHEUS_URL
+              value: {{ printf "http://sites-prometheus.%s.svc:9090" .Values.namespaces.control | quote }}
+          lifecycle:
+            preStop:
+              # Endpoint removal and SIGTERM race: kube-proxy / the gateway keep
+              # sending to this Pod for a moment after termination starts. Holding
+              # SIGTERM back for 2s lets the endpoints controller catch up so those
+              # requests are not refused by an already closed socket. The image is
+              # python:3.14-alpine (see Dockerfile); busybox provides sleep.
+              exec:
+                command: ["sleep", "2"]
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+            # 10s: not explicitly set before = default 1s, 2026-08-20 in the host paging storm
+            # This 1s window drags sites-api into the restart loop (13 times).
+            timeoutSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          volumeMounts:
+            - name: service-token
+              mountPath: /var/run/sites
+              readOnly: true
+            - name: database-auth
+              mountPath: /var/run/sites-db
+              readOnly: true
+            - name: registry-auth
+              mountPath: /var/run/sites-registry
+              readOnly: True
+            - name: sources
+              mountPath: /var/lib/sites/sources
+            - name: oss-auth
+              mountPath: /var/run/sites-oss
+              readOnly: true
+      volumes:
+        - name: registry-auth
+          secret:
+            secretName: {{ .Values.existingSecrets.registry.name }}
+            items:
+              - key: {{ .Values.existingSecrets.registry.passwordKey }}
+                path: password
+        - name: service-token
+          secret:
+            secretName: {{ .Values.existingSecrets.api.name }}
+            items:
+              - key: {{ .Values.existingSecrets.api.tokenKey }}
+                path: token
+              - key: {{ .Values.existingSecrets.api.consoleSessionKey }}
+                path: console-session-key
+        - name: database-auth
+          secret:
+            secretName: {{ .Values.existingSecrets.database.name }}
+            items:
+              - key: {{ .Values.existingSecrets.database.passwordKey }}
+                path: password
+        - name: sources
+          persistentVolumeClaim:
+            claimName: sites-sources
+        - name: oss-auth
+          secret:
+            secretName: {{ .Values.existingSecrets.objectStorage.name }}
+            items:
+              - key: {{ .Values.existingSecrets.objectStorage.accessKeyIdKey }}
+                path: access-key-id
+              - key: {{ .Values.existingSecrets.objectStorage.accessKeySecretKey }}
+                path: access-key-secret
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sites-api
+  namespace: {{ .Values.namespaces.control }}
+spec:
+  type: {{ .Values.service.type }}
+  # The host 18091 is fixedly forwarded to the NodePort of the control-plane, while the sites-api Pod is forwarded to the NodePort of the control-plane due to CP
+  # The stain falls on the worker; cross-node forwarding must be allowed here, otherwise the CP will suffer from no local endpoint
+  # Discard the request directly. The data side of the public site still uses Local and is hosted by workers.
+  {{- if or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer") }}
+  externalTrafficPolicy: Cluster
+  {{- end }}
+  selector:
+    app.kubernetes.io/name: sites-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sites-operator
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-operator
+    app.kubernetes.io/part-of: sites
+spec:
+  replicas: 1
+  # Same as sites-api, correctness relies on a single copy, but the consequences are heavier: operator has no leader election /
+  # Lease and status are written back without resourceVersion. If two instances coexist, they will reconcile the same at the same time.
+  # Batch CR. The worst form is "cleaning and rebuilding" - the old operator keeps the old snapshot and reconcile() rebuilds
+  # Workload, the new operator uses _cleanup() and removes the finalizer after deletion, leaving one in service
+  # But there is no orphan workload owned by CR: it is not visible on the platform side, and the NodePort it occupies is permanently returned.
+  # Not in the pool.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sites-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sites-operator
+        app.kubernetes.io/part-of: sites
+    spec:
+      serviceAccountName: sites-operator
+      enableServiceLinks: false
+      # Explicit rather than the 30s default so the budget is visible next to the
+      # api's: a reconcile pass in flight is bounded by the Kubernetes client
+      # timeouts and must finish before kubelet SIGKILLs.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operator
+          image: {{ include "site.image" (list .Values.images.control) }}
+          # The image tag is fixed to :local and the content changes with each build, and must be based on the registry in the cluster;
+          # IfNotPresent, the old cache with the same name of node containerd will win, and the new image pushed up again will be silently invalid.
+          # (A rollout can otherwise be green while the node still runs the old image).
+          imagePullPolicy: {{ .Values.images.control.pullPolicy }}
+          command:
+            - python3
+            - -m
+            - sites.operator
+          ports:
+            - name: metrics
+              containerPort: 9090
+          envFrom:
+            # Configuration of L7 ingress. Optional: This ConfigMap does not need to be used in deployments without gateway.
+            # exists. Without it, the Pod should not be unable to start - then all the default values are used, which is nodeport.
+            - configMapRef:
+                name: sites-exposure
+                optional: true
+            - configMapRef:
+                name: sites-oss
+                optional: true
+            - configMapRef:
+                name: sites-tracing
+                optional: true
+          env:
+            # Basic authentication is required for the registry cluster (see 07-build-plane.yaml for proxied proxying).
+            # The user name is given to the environment variable and the password to go to the file: the environment variable will be entered into kubectl describe.
+            # It will also be printed out by any env in the same Pod.
+            - name: SITES_REGISTRY_USERNAME
+              value: sites
+            - name: SITES_CONTROL_NAMESPACE
+              value: {{ .Values.namespaces.control | quote }}
+            - name: SITES_PUBLIC_URL_HOST
+              value: http://127.0.0.1
+            # The Pod network this release's NetworkPolicies exclude, and this
+            # Pod's own address to check it against. The operator refuses to
+            # start if the address is outside the declaration, or if the
+            # address is unavailable -- "cannot check" is not "checked".
+            # Removing either entry is a refusal, not a silent fallback.
+            - name: SITES_CLUSTER_POD_CIDR
+              value: {{ required "clusterNetwork.podCIDR is required: the operator verifies it against this Pod's own address at startup and refuses to run without it. See docs/CONFIGURATION.md." .Values.clusterNetwork.podCIDR | quote }}
+            - name: SITES_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: SITES_RECONCILE_INTERVAL
+              value: "2"
+            - name: SITES_DEPLOY_TIMEOUT_SECONDS
+              value: "120"
+            # Used only by tenant initContainers. The nginx workload image is
+            # fixed separately and never receives this image's OSS credentials.
+            - name: SITES_STATIC_ARTIFACT_DOWNLOADER_IMAGE
+              value: {{ include "site.image" (list .Values.images.control) | quote }}
+            - name: SITES_STATIC_ARTIFACT_CONTROL_SECRET
+              value: {{ .Values.existingSecrets.objectStorage.name | quote }}
+            # Leave empty for public HTTPS OSS. Private/VPC endpoints require
+            # exact provider CIDRs, for example "10.20.0.0/24,10.20.1.0/24".
+            - name: SITES_STATIC_ARTIFACT_EGRESS_CIDRS
+              value: ""
+            - name: SITES_LOG_FORMAT
+              value: json
+          # startupProbe catches a cold start: the operator is up until the first sweep completes
+          # /healthz is 503 (that's right - haven't proven it's moving forward yet). No startupProbe
+          # If so, liveness will kill it directly in this window and turn it into a CrashLoop that cannot be started.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 5
+            failureThreshold: 60
+          # The criterion for liveness is "how long ago the last round of sweep was completed", not whether the port is alive -
+          # Metrics is an independent daemon thread, and it will still respond with 200 when reconcile is deadlocked.
+          # The threshold defaults to 300s and is much larger than a slow sweep (see operator.py _health_stale_after),
+          # Therefore, only real deadlocks will be caught here, and instances that are slowly converging will not be accidentally killed.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: 30
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          volumeMounts:
+            - name: registry-auth
+              mountPath: /var/run/sites-registry
+              readOnly: True
+            - name: sources
+              mountPath: /var/lib/sites/sources
+            - name: oss-auth
+              mountPath: /var/run/sites-oss
+              readOnly: true
+      volumes:
+        - name: registry-auth
+          secret:
+            secretName: {{ .Values.existingSecrets.registry.name }}
+            items:
+              - key: {{ .Values.existingSecrets.registry.passwordKey }}
+                path: password
+        - name: sources
+          persistentVolumeClaim:
+            claimName: sites-sources
+        - name: oss-auth
+          secret:
+            secretName: {{ .Values.existingSecrets.objectStorage.name }}
+            items:
+              - key: {{ .Values.existingSecrets.objectStorage.accessKeyIdKey }}
+                path: access-key-id
+              - key: {{ .Values.existingSecrets.objectStorage.accessKeySecretKey }}
+                path: access-key-secret
+            optional: true
+---
+# The fetch surface of the operator. ClusterIP instead of NodePort: This endpoint is **not authenticated** and should only be used by
+# Crawler access within the cluster. The endpoint itself is by design without CR content and tenant identification (see operator.py
+# _MetricsHandler constraints), so the exposure is limited to "how many sites in this cluster are in what
+# Stage" such aggregation; even so, a NetworkPolicy should be added in production to converge the inbound direction to
+# The namespace where the crawler is located - Prometheus has not been deployed yet, so do not write empty rule placeholders yet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sites-operator-metrics
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-operator
+    app.kubernetes.io/part-of: sites
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sites-operator
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics

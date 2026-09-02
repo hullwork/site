@@ -1,0 +1,78 @@
+{
+  "_comment": "Cross-service consistency vectors for the X-Acting-Subject pseudonym. Every service on this contract vendors its own copy and runs the same expected values. What must never diverge is the data below; prose may be rewritten locally.",
+  "_formula": "HMAC-SHA256(salt, tenant_id + \"\\u0000\" + subject_id).digest()[:16].hex()",
+  "_notes": [
+    "The separator is NUL (\\u0000), not a colon or a dash -- otherwise (tenant-al, ice) and (tenant-a, lice) collide.",
+    "Truncation is on the first 16 bytes of the digest, not the first 16 characters of the hex string. Getting this wrong yields a 16-character value, which a receiver rejects on length.",
+    "Output must match ^[0-9a-f]{32}$. Lowercase hex is a subset of every identity character class on this contract, which is why receivers do not have to negotiate their regexes.",
+    "tenant_id and subject_id are encoded as UTF-8 before the HMAC. Two vectors below carry non-ASCII subject_ids so that this is exercised rather than assumed.",
+    "The salt must be at least 32 bytes. A party that derives with less has implemented the formula but not its strength: the pseudonym still looks correct and no receiver can tell.",
+    "The invariant to assert is the canonical payload digest recorded in _payload_sha256, not this file's byte hash -- prose differs between services on purpose. See _payload_canonicalization for how to recompute it."
+  ],
+  "header": "X-Acting-Subject",
+  "pseudonym_pattern": "^[0-9a-f]{32}$",
+  "min_salt_bytes": 32,
+  "vectors": [
+    {
+      "salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "tenant_id": "tenant-a",
+      "subject_id": "alice",
+      "expected": "0645ca35688bd5af1135ecc65edaa4ce"
+    },
+    {
+      "salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "tenant_id": "tenant-al",
+      "subject_id": "ice",
+      "expected": "c33abefe2b71dc88c3c9f86842c46684",
+      "_why": "with the next vector, proves the NUL separator is in effect"
+    },
+    {
+      "salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "tenant_id": "tenant-a",
+      "subject_id": "lice",
+      "expected": "092b4b261c684e4b9da58c62a7c02820"
+    },
+    {
+      "salt": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+      "tenant_id": "tenant-a",
+      "subject_id": "alice",
+      "expected": "cd5eb54ad464e3bf48351a128a28b06f",
+      "_why": "salt sensitivity"
+    },
+    {
+      "salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "tenant_id": "acme",
+      "subject_id": "user-0123456789abcdef0123456789abcdef",
+      "expected": "b846014603301513909d2bf5c2b78e4d"
+    },
+    {
+      "salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "tenant_id": "acme",
+      "subject_id": "j\u00fcrgen@example.com",
+      "expected": "bddd20228b5b5170e4b91d43c50e80c8",
+      "_why": "non-ASCII subject_id. It pins two things that all-ASCII data leaves invisible: tenant_id and subject_id are encoded as UTF-8 before the HMAC (Latin-1 can represent this character, so a narrower encoding still succeeds and silently yields a different pseudonym), and the ensure_ascii clause of the canonicalisation (with all-ASCII data both settings give the same digest, so that clause sits unguarded until a vector like this one exists). The file itself stays pure ASCII by escaping the character, so services that require ASCII-only sources can still vendor it verbatim."
+    },
+    {
+      "salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "tenant_id": "tenant-b",
+      "subject_id": "alice",
+      "expected": "9fb3515ba544df5ef935af57b609b6b0",
+      "_why": "same subject_id as the first vector under a different tenant_id. Proves the tenant participates in the derivation at all: an implementation that hashed only the subject would still pass every other vector here, and the two services would then hand the same pseudonym to two different organisations' users."
+    },
+    {
+      "salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "tenant_id": "Tenant.One",
+      "subject_id": "Alice@example.com",
+      "expected": "3bb177853748a11280d364472c34d240",
+      "_why": "uppercase and punctuation on both halves. Pins that neither half is case-folded or normalised before hashing; a service that lowercased identifiers would collide two distinct subjects."
+    }
+  ],
+  "_payload_sha256": "1a5daa90834c2cc2e4d793dcfd946689f7434e157d9bae9bb5019f83caa2c24e",
+  "_payload_canonicalization": [
+    "Build an object with exactly these keys: header, pseudonym_pattern, min_salt_bytes, vectors.",
+    "Each entry of vectors keeps exactly salt, tenant_id, subject_id, expected -- drop _why and anything else.",
+    "Serialize with sort_keys=True, separators=(\",\", \":\"), ensure_ascii=True, then SHA-256 the UTF-8 bytes.",
+    "ensure_ascii matters even though today's data is all ASCII: the day a vector carries a non-ASCII subject_id, two implementations that disagree on this flag will report a fork while the data is in fact identical -- exactly the false alarm this anchor exists to avoid.",
+    "Recomputing this without the rules above is guesswork; a wrong guess reports a fork that is not there."
+  ]
+}

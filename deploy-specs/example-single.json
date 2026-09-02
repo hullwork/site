@@ -1,0 +1,7 @@
+{
+  "name": "example-web",
+  "image": "nginx:1.29-alpine",
+  "port": 80,
+  "healthPath": "/",
+  "exposure": "public"
+}

@@ -1,0 +1,101 @@
+# site alert rules, as an artifact any Prometheus can import.
+#
+# 🔴 GENERATED - do not edit by hand. The source of truth is the
+# `sites-alerts.yml` key of the `sites-prometheus-config` ConfigMap in
+# charts/site/templates/11-monitoring.yaml, which is what this repository's own bundled
+# Prometheus loads. test_monitoring.py fails if the two drift, so an operator
+# importing this file gets exactly the rules site runs against itself.
+# Regenerate with: python3 observability/scripts/render-rules.py
+#
+# Job names: the expressions match `sites-(api|operator|activator).*` and
+# `sites-envoy-gateway.*`, so both the bundled jobs (suffixed `-local`) and jobs
+# named after the Services work. Keep any renaming inside those prefixes.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sites-rules
+  labels:
+    app.kubernetes.io/name: sites
+    app.kubernetes.io/part-of: sites
+spec:
+  groups:
+  - name: sites-control-plane
+    rules:
+    - alert: SitesControlPlaneTargetDown
+      expr: up{job=~"sites-(api|operator|activator).*"} == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: Sites control-plane scrape target is down
+        description: Prometheus cannot scrape {{ $labels.job }} ({{ $labels.instance }}) for 2 minutes.
+    - alert: SitesGatewayDown
+      expr: up{job=~"sites-envoy-gateway.*"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: Sites L7 gateway has no ready data plane
+        description: 'Prometheus cannot scrape {{ $labels.job }} ({{ $labels.instance }}) for 5 minutes: no ready envoy pod is behind the gateway Service and every public site entry is down or about to be.'
+    - alert: SitesApiDependencyDown
+      expr: sites_api_dependency_up == 0
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: Sites API dependency is failing
+        description: Dependency {{ $labels.dependency }} has been failing on the API's most recent use for 2 minutes.
+    - alert: SitesApiSnapshotStale
+      expr: 'sites_api_snapshot_age_seconds > 300
+
+        or (up{job="sites-api-local"} == 1 unless sites_api_snapshot_age_seconds)
+
+        '
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Sites API database snapshot is stale
+        description: The API's Kubernetes/database snapshot has not synced successfully for more than 5 minutes (age {{ $value | humanizeDuration }}).
+    - alert: SitesOperatorSweepStale
+      expr: time() - sites_operator_last_sweep_timestamp_seconds > 300
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: Sites operator has not completed a sweep
+        description: The operator's last completed reconcile sweep is more than 5 minutes old; custom resources are not being reconciled.
+    - alert: SitesTraceExportDrops
+      expr: increase(sites_tracing_export_total{outcome=~"dropped_.*"}[10m]) > 0
+      for: 0m
+      labels:
+        severity: warning
+      annotations:
+        summary: Sites trace exporter is dropping spans
+        description: '{{ $value | humanize }} spans were dropped with outcome={{ $labels.outcome }} in the last 10 minutes; application traffic is deliberately unaffected.'
+  - name: sites-activator
+    rules:
+    - alert: SitesActivatorWakeFailures
+      expr: increase(sites_activator_wakes_total{outcome!="success"}[10m]) > 0
+      for: 0m
+      labels:
+        severity: warning
+      annotations:
+        summary: Sites activator cold starts are failing
+        description: '{{ $value | humanize }} cold starts ended with outcome={{ $labels.outcome }} in the last 10 minutes.'
+    - alert: SitesActivatorUnhealthy
+      expr: increase(sites_activator_requests_total{outcome=~"timeout|error"}[10m]) > 0
+      for: 0m
+      labels:
+        severity: warning
+      annotations:
+        summary: Sites activator is failing to forward requests
+        description: '{{ $value | humanize }} forwarded requests ended with outcome={{ $labels.outcome }} in the last 10 minutes.'
+    - alert: SitesActivatorRouteTableStale
+      expr: sites_activator_route_age_seconds > 300 or sites_activator_route_age_seconds < 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: Sites activator route table is not refreshing
+        description: The activator has not refreshed its route table from the apiserver for more than 5 minutes; new scale-to-zero sites will 404 until it does.

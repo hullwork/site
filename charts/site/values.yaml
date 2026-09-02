@@ -1,0 +1,123 @@
+namespaces:
+  control: sites-local
+  gateway: sites-gateway
+
+images:
+  control:
+    repository: ghcr.io/convee/site-control
+    tag: "v0.1.0"
+    digest: ""
+    pullPolicy: IfNotPresent
+  postgres:
+    repository: postgres
+    tag: 17.10-alpine3.24
+    digest: sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    pullPolicy: IfNotPresent
+  registry:
+    repository: registry
+    tag: 3.1.1
+    digest: sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33
+    pullPolicy: IfNotPresent
+  nginx:
+    repository: nginxinc/nginx-unprivileged
+    tag: 1.29-alpine
+    digest: sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+    pullPolicy: IfNotPresent
+  prometheus:
+    repository: quay.io/prometheus/prometheus
+    tag: v3.13.2
+    digest: sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69
+    pullPolicy: IfNotPresent
+  localPathProvisioner:
+    repository: rancher/local-path-provisioner
+    tag: v0.0.31
+    digest: sha256:80496fdeb307541007621959aa13aed41d31db9cd2dc4167c19833e0bfa3878c
+    pullPolicy: IfNotPresent
+  busybox:
+    repository: busybox
+    tag: 1.37.0
+    digest: sha256:9db7b59979c38555a39def84a31fb98b5296952f9e3afd4f6f11f05b07adfab0
+    pullPolicy: IfNotPresent
+
+# The Pod network of the cluster this release is installed on. Required, with no
+# default on purpose: three NetworkPolicy rules below are written as "allow
+# 0.0.0.0/0 except this", so a wrong value excludes nothing and the rules quietly
+# allow everyone -- without failing and without looking wrong in `kubectl get
+# netpol`. Shipping a default would keep that as the unconfigured behaviour.
+# Find it with: kubectl cluster-info dump | grep -m1 cluster-cidr
+# See docs/CONFIGURATION.md.
+clusterNetwork:
+  podCIDR: ""
+
+service:
+  type: ClusterIP
+  nodePort: null
+
+storage:
+  storageClass: standard
+
+localPathProvisioner:
+  enabled: false
+
+postgresql:
+  embedded:
+    enabled: true
+
+database:
+  host: sites-postgres
+  runtimeHost: ""
+  port: 5432
+  name: sites
+  user: sites
+
+# site never creates credential material. Create these Secrets before
+# installing the Chart; scripts/bootstrap-standalone-secrets.sh is a safe local
+# development helper. Key names are configurable for external secret managers.
+existingSecrets:
+  api:
+    name: sites-api-token
+    tokenKey: token
+    consoleSessionKey: console-session-key
+  database:
+    name: sites-postgres-auth
+    usernameKey: username
+    databaseKey: database
+    passwordKey: password
+  registry:
+    name: sites-registry-auth
+    passwordKey: password
+    htpasswdKey: htpasswd
+  objectStorage:
+    name: sites-oss-auth
+    accessKeyIdKey: access-key-id
+    accessKeySecretKey: access-key-secret
+
+buildPlane:
+  enabled: true
+
+gateway:
+  enabled: false
+  serviceType: LoadBalancer
+  httpNodePort: null
+  metricsNodePort: null
+
+monitoring:
+  enabled: false
+
+# The agent-facing MCP tool surface at POST /mcp on the control-plane API. On by
+# default: it is a second spelling of the same authenticated /v1/* requests and grants
+# no capability the caller's credential does not already have, so defaulting it off
+# would not narrow a trust boundary - it would only make an agent host's tools silently
+# absent until somebody found this flag.
+mcpEndpoint:
+  enabled: true
+
+# Optional dependency-free OTLP/HTTP JSON tracing. Empty/disabled means no exporter
+# thread and preserves standalone operation with only trace-id log correlation.
+tracing:
+  enabled: false
+  endpoint: ""
+  queueSize: 2048
+  batchSize: 128
+  flushSeconds: 1
+  timeoutSeconds: 2

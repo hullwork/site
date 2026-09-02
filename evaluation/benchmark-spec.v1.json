@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "benchmarkVersion": "1.0.0",
+  "profiles": {
+    "contract": {
+      "description": "Deterministic source, deployment, version-policy, and localhost checks.",
+      "scoredStages": {
+        "static-html": ["source-generation", "deployment-contract", "localhost-runtime-smoke"],
+        "vite-static": ["source-generation", "source-contract", "deployment-contract"],
+        "fastapi-postgresql": ["source-generation", "source-contract", "deployment-contract", "shared-schema-version-policy"],
+        "express-postgresql": ["source-generation", "source-contract", "deployment-contract", "shared-schema-version-policy"]
+      }
+    },
+    "cluster": {
+      "description": "Real clean-namespace Helm, static/dynamic publish, revision-match, rollback/recovery, and cleanup trials.",
+      "implemented": true,
+      "minimumTrials": 60,
+      "scoredStages": ["staticPublish", "dynamicPublish", "revisionMatch", "rollbackRecovery", "cleanup"]
+    },
+    "agent": {
+      "description": "Reserved for fixed-prompt, fixed-seed CLI-oracle and agent trials.",
+      "implemented": false
+    }
+  }
+}

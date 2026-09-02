@@ -1,0 +1,31 @@
+# Local/development overlay. It contains names and key contracts only; credentials
+# are generated directly in the target cluster by scripts/bootstrap-standalone-secrets.sh.
+# The Pod network of the reference local kubeadm topology. The chart itself has
+# no default for this: it is a fact about the target cluster, not a preference.
+# Declared here because this overlay names one specific topology. On any other
+# cluster this value is wrong, and the operator will say so and refuse to start
+# rather than apply NetworkPolicies whose exclusions match nothing.
+clusterNetwork:
+  podCIDR: 10.201.0.0/16
+
+localPathProvisioner:
+  enabled: true
+
+existingSecrets:
+  api:
+    name: sites-api-token
+    tokenKey: token
+    consoleSessionKey: console-session-key
+  database:
+    name: sites-postgres-auth
+    usernameKey: username
+    databaseKey: database
+    passwordKey: password
+  registry:
+    name: sites-registry-auth
+    passwordKey: password
+    htpasswdKey: htpasswd
+  objectStorage:
+    name: sites-oss-auth
+    accessKeyIdKey: access-key-id
+    accessKeySecretKey: access-key-secret

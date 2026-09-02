@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "site"
+version = "0.1.0"
+description = "Agent-oriented, evidence-backed website deployment control plane"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "agent contributors" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "boto3==1.43.78",
+  "psycopg[binary]==3.3.4",
+  "sqlglot==30.3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/convee/site"
+Documentation = "https://github.com/convee/site/tree/main/docs"
+Issues = "https://github.com/convee/site/issues"
+Security = "https://github.com/convee/site/security/advisories/new"
+Source = "https://github.com/convee/site"
+
+[project.scripts]
+sites = "sites.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "PyYAML>=6.0.2,<7",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["sites*"]

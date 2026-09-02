@@ -1,0 +1,79 @@
+# How to scrape site from a Prometheus you already run.
+#
+# This repository *does* ship a Prometheus (charts/site/templates/11-monitoring.yaml), but
+# not as a collection stack: src/sites/monitoring.py queries it to render the
+# admin console's cluster and application charts, so it is a product dependency.
+# Point SITES_PROMETHEUS_URL at your own instead and the bundled one becomes
+# optional - see observability/README.md.
+#
+# All three endpoints are unauthenticated and carry no tenant or site identity
+# in any label: route templates only (src/sites/api.py::_route_template), kind
+# and outcome enumerations elsewhere. Restrict the ports by NetworkPolicy;
+# charts/site/templates/09-activator.yaml already admits only labelled scrapers to the admin
+# port, which also serves /scale-metrics and *does* carry a host name.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sites-api
+  labels:
+    app.kubernetes.io/name: sites-api
+    app.kubernetes.io/part-of: sites
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sites-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sites-operator
+  labels:
+    app.kubernetes.io/name: sites-operator
+    app.kubernetes.io/part-of: sites
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sites-operator
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sites-activator
+  labels:
+    app.kubernetes.io/name: sites-activator
+    app.kubernetes.io/part-of: sites
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sites-activator
+  endpoints:
+    # The admin port, not the forwarding plane: every path on the forwarding
+    # plane belongs to a tenant's application.
+    - port: admin
+      path: /metrics
+      interval: 15s
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sites-scrape-config-sample
+data:
+  scrape_configs.yml: |
+    scrape_configs:
+      - job_name: sites-api
+        static_configs:
+          - targets: ["sites-api.sites-local.svc:8080"]
+      - job_name: sites-operator
+        static_configs:
+          - targets: ["sites-operator-metrics.sites-local.svc:9090"]
+      - job_name: sites-activator
+        static_configs:
+          - targets: ["sites-activator.sites-local.svc:9090"]

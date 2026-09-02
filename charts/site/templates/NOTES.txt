@@ -1,0 +1,22 @@
+site uses existing Kubernetes Secrets and never stores credentials in Helm values.
+
+Required in namespace {{ .Values.namespaces.control }}:
+  {{ .Values.existingSecrets.api.name }}:
+    {{ .Values.existingSecrets.api.tokenKey }}, {{ .Values.existingSecrets.api.consoleSessionKey }}
+  {{ .Values.existingSecrets.database.name }}:
+    {{ .Values.existingSecrets.database.usernameKey }}, {{ .Values.existingSecrets.database.databaseKey }}, {{ .Values.existingSecrets.database.passwordKey }}
+{{- if .Values.buildPlane.enabled }}
+  {{ .Values.existingSecrets.registry.name }}:
+    {{ .Values.existingSecrets.registry.passwordKey }}, {{ .Values.existingSecrets.registry.htpasswdKey }}
+{{- end }}
+
+For a disposable development cluster, generate them without writing plaintext values to
+this repository:
+  scripts/bootstrap-standalone-secrets.sh --namespace {{ .Values.namespaces.control }}
+
+Then verify the installation:
+  scripts/standalone.sh smoke --namespace {{ .Values.namespaces.control }}
+
+Object storage is optional. When enabled, create {{ .Values.existingSecrets.objectStorage.name }}
+with keys {{ .Values.existingSecrets.objectStorage.accessKeyIdKey }} and
+{{ .Values.existingSecrets.objectStorage.accessKeySecretKey }} through your secret manager.

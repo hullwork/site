@@ -1,0 +1,291 @@
+# Waker for hibernating sites. **This is only required for the L7 entrance road** (SITES_EXPOSURE_BACKEND=gateway),
+# Apply together with 08-gateway.yaml; not deployed under NodePort topology.
+#
+# According to the division of labor, Knative: the activator is responsible for 0→1, and the external expander (KEDA) is responsible for N→0. There are metrics for scaling down
+# According to the cycle decision-making, capacity expansion is not - the request is already at the door and must be received on the spot.
+#
+# Traffic: Gateway ─ (HTTPRoute backendRef) → activator ─ (check table by Host) → tenant site.
+# Only the routes of sites with scaleToZero turned on point here, and the rest are still directly connected to their own Services.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sites-activator
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-activator
+    app.kubernetes.io/part-of: sites
+automountServiceAccountToken: true
+---
+# Source of routing table: SiteDeployment in control plane ns. Read only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sites-activator
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-activator
+    app.kubernetes.io/part-of: sites
+rules:
+  - apiGroups: ["sites.local"]
+    resources: ["sitedeployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sites-activator
+  namespace: {{ .Values.namespaces.control }}
+subjects:
+  - kind: ServiceAccount
+    name: sites-activator
+    namespace: {{ .Values.namespaces.control }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sites-activator
+---
+# 🔴 The write permission only goes to deployments/scale, not to the Deployment itself.
+#
+# The latter means that the image, env, and securityContext can be changed - the activator is the only one that directly faces public network requests.
+# When the control plane component is compromised, it means handing over the workload of all tenants. The scale sub-resource can only change the replica count.
+# Reading the status still requires get deployments: availableReplicas is not in the status of scale.
+# And "the expansion has been sent out" and "there is really a copy available" are two different things.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: sites-activator
+  labels:
+    app.kubernetes.io/name: sites-activator
+    app.kubernetes.io/part-of: sites
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sites-activator
+subjects:
+  - kind: ServiceAccount
+    name: sites-activator
+    namespace: {{ .Values.namespaces.control }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sites-activator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sites-activator
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-activator
+    app.kubernetes.io/part-of: sites
+spec:
+  replicas: 1
+  # Unlike the two control plane processes, RollingUpdate: activator is used here on the data path,
+  # All STZ sites are unreachable during Recreate. It is stateless, does not occupy the host port, and is safe to roll over.
+  # maxUnavailable: 0 ensures that the new one is started before the old one is stopped.
+  #
+  # ⚠️ The solo lock is in-process. When there are multiple replicas, each copy will be expanded once - that is idempotent.
+  # (patch replicas=1), they will not cover each other, so if you want multiple replicas in the future, you don’t need to solve the lock problem first.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sites-activator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sites-activator
+        app.kubernetes.io/part-of: sites
+    spec:
+      serviceAccountName: sites-activator
+      enableServiceLinks: false
+      # The process handles SIGTERM (sites.shutdown): it stops accepting, then joins the
+      # forwards still in flight before exiting. 30s is the budget for those forwards;
+      # anything longer (a slow download) is cut by SIGKILL at the end of the grace period.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: activator
+          image: {{ include "site.image" (list .Values.images.control) }}
+          # The image tag is fixed to :local and the content changes with each build. It must be based on the registry in the cluster.
+          imagePullPolicy: {{ .Values.images.control.pullPolicy }}
+          command:
+            - python3
+            - -m
+            - sites.activator
+          # Endpoint removal and SIGTERM race: kubelet sends SIGTERM as soon as the Pod is
+          # marked terminating, while Envoy learns about the removed endpoint asynchronously.
+          # Sleeping first keeps the listener open across that window so requests already
+          # routed here are answered instead of refused. `sleep` is busybox in the
+          # python:alpine base image; it needs no writable filesystem.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "2"]
+          envFrom:
+            # Configuration of L7 ingress. Optional: This ConfigMap does not need to be used in deployments without gateway.
+            # exists. Without it, the Pod should not be unable to start - then all the default values are used, which is nodeport.
+            - configMapRef:
+                name: sites-exposure
+                optional: true
+            - configMapRef:
+                name: sites-tracing
+                optional: true
+          env:
+            - name: SITES_CONTROL_NAMESPACE
+              value: {{ .Values.namespaces.control | quote }}
+            - name: SITES_LOG_FORMAT
+              value: json
+            - name: SITES_ACTIVATOR_MAX_REQUEST_BYTES
+              value: "4194304"
+          ports:
+            - name: http
+              containerPort: 8090
+            # Operation and maintenance: health, scaling metrics, Prometheus metrics.
+            # 🔴 Separate ports instead of paths from the forwarding plane: every path on the forwarding plane belongs to the tenant
+            # application, retaining names like /healthz is tantamount to announcing that the path will never reach the site.
+            - name: admin
+              containerPort: 9090
+          # Two probes, two questions.
+          #
+          # readiness (/healthz): "can this process forward anything right now?" 503 only when
+          # there is no table to forward with - never refreshed, or stale *and* empty. A stale
+          # but populated table stays Ready: it is the only copy of the routes this process has
+          # while the apiserver is unreachable, and it still forwards every site that existed at
+          # the last refresh.
+          #
+          # liveness (/livez): "is the process answering HTTP?" - nothing about the apiserver.
+          # 🔴 Liveness must not be bound to the apiserver. Both probes used to hit /healthz with
+          # the old "refreshed within 60s" criterion: an apiserver outage longer than 60s first
+          # pulled the endpoint, then killed the process; the restart came back with no table at
+          # all (_fetched_at = 0), never turned Ready, and CrashLooped until the apiserver
+          # returned. Killing the process only discards the one good table it still had.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: admin
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            # 128Mi was killed by OOM in a real cluster (Exit 137): After more STZ sites were added, the routing table +
+            # The forwarding buffer exceeds it, and the activator is on the data path, and it cannot be pulled by KEDA once it hangs
+            # The metric triggers fail-open, and all STZ sites are forced to wake up (actual measurement on 2026-08-19).
+            limits:
+              cpu: 500m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sites-activator
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-activator
+    app.kubernetes.io/part-of: sites
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sites-activator
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+    # KEDA's metrics-api scaler checks this port by host.
+    # ⚠️ It answers by site, so it is also a list of tenant sites - must use NetworkPolicy in production
+    # Converg the inbound direction to the Namespace where the scaler is located. There is currently no NetworkPolicy in the control plane.
+    # (sites-api and operator are not available either). This will be filled together with the gap. It will not be opened here.
+    - name: admin
+      port: 9090
+      targetPort: admin
+---
+# The entry direction of the activator. **The sources of the two ports are completely different, so they are divided into two rules. **
+#
+# 🔴 9090 is the most important reason for this strategy: /scale-metrics Answer by host and ask each question one by one.
+# A complete list of tenant sites. It was previously open to any Pod in the cluster - including those deployed by the tenant itself
+# Application. The 8090 side does not have this problem (it forwards by Host and cannot ask for a list).
+#
+# 🔴 What is released is Envoy’s **data plane** Namespace, not where the Gateway object is located
+# sites-gateway. Envoy Gateway builds the data plane Pod in envoy-gateway-system; press the latter
+# The write policy syntax is legal and the apply is successful, but the traffic is still rejected, and the symptom points to the gateway configuration.
+#
+# 🔴Tag gateway.envoyproxy.io/owning-gateway-name. use
+# app.kubernetes.io/name will put in the data plane of **any** Gateway - create another one in the same cluster
+# A Gateway bypasses this policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sites-activator
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: sites-activator
+    app.kubernetes.io/part-of: sites
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: sites-activator
+  policyTypes:
+    - Ingress
+  ingress:
+    # Forwarding plane: Only the data plane of the shared gateway can enter.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: {{ .Values.namespaces.gateway }}
+      ports:
+        - protocol: TCP
+          port: 8090
+    # Operation and maintenance: The scaler pulls metrics, and the node itself - the readiness/liveness of kubelet hit
+    # /healthz and /livez on this port, and the traffic originating from the host falls outside the Pod network segment.
+    # 0.0.0.0/0-except is released (same writing method as the registry of 07-build-plane).
+    # The consequence of blocking it is that the Pod is always NotReady, but the activator itself is fine.
+    #
+    # The in-cluster Prometheus (11-monitoring.yaml, same namespace) scrapes /metrics here. It is a
+    # Pod, so it is inside the excepted segment and needs its own entry; a podSelector without a
+    # namespaceSelector means "this namespace only". Labels copied from that Deployment's template.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: keda
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: sites-prometheus
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - {{ required "clusterNetwork.podCIDR is required: it is the Pod network of the target cluster, and these rules are 'allow everything except it'. An unset or wrong value excludes nothing. See docs/CONFIGURATION.md." .Values.clusterNetwork.podCIDR }}
+      ports:
+        - protocol: TCP
+          port: 9090

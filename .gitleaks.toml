@@ -1,0 +1,26 @@
+# gitleaks configuration: default rules plus this repository's exemptions.
+#
+# gitleaks answers "is there a credential in the history". It is deliberately
+# blind to the other half of the problem: a private cloud account or instance
+# identifier -- an OSS bucket named after the account UID, an RDS instance
+# endpoint -- has no entropy and no credential shape, so gitleaks reports the
+# tree clean while it still names the operator's account. That half is guarded
+# by test_cloud_identifiers.py. Neither check substitutes for the other; a green
+# gitleaks run is not evidence that no private infrastructure remains.
+title = "site"
+
+[extend]
+useDefault = true
+
+# generic-api-key fires on the *source text* `api_key, subject=acting` in the
+# tenancy tests: both are Python identifiers, and `api_key` there is a key the
+# test itself just created through the API. Allowlisting the file wholesale
+# would silently cover a real credential added to it later, so this is scoped to
+# the exact rule, the exact file, and the exact matched string, all three at once.
+[[allowlists]]
+description = "Python keyword arguments in test_tenancy.py, not credential values"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^test_tenancy\.py$''']
+regexTarget = "secret"
+regexes = ['''^subject=acting$''']

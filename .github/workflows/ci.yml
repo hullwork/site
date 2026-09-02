@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  workflow_call:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: {persist-credentials: false}
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - run: make chart-lint
+      - run: make chart-render
+
+  python:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SITES_TEST_DB_HOST: 127.0.0.1
+      SITES_TEST_DB_PORT: 5432
+      SITES_TEST_DB_NAME: postgres
+      SITES_TEST_DB_USER: postgres
+      SITES_TEST_DB_PASSWORD: postgres
+      # Opts PostgresMigrationTests in. Without it that class skips itself, and a
+      # skipped class still prints OK: the five real-PostgreSQL migration cases
+      # were silently not running here. sslmode is explicit because
+      # DatabaseConfig defaults to "require" and this service speaks no TLS.
+      # It shares the database with the other PostgreSQL-backed tests safely:
+      # that class owns "public" (dropped and recreated per case) while every
+      # other case runs in its own test_<uuid> schema.
+      SITES_TEST_PG_DSN: host=127.0.0.1 port=5432 dbname=postgres user=postgres password=postgres sslmode=disable
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: {persist-credentials: false}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+      - run: uv python install ${{ matrix.python-version }}
+      - run: uv sync --locked --extra dev --python ${{ matrix.python-version }}
+      - run: uv run --locked --extra dev --python ${{ matrix.python-version }} python -m unittest discover -s tests -t . -p 'test_*.py'
+      # The step above would stay green if PostgresMigrationTests skipped itself,
+      # because unittest reports a skipped class as OK. Assert it actually ran.
+      - name: Assert the PostgreSQL migration tests are not skipped
+        run: |
+          out=$(uv run --locked --extra dev --python ${{ matrix.python-version }} \
+            python -m unittest tests.test_tenancy.PostgresMigrationTests -v 2>&1) || {
+              echo "$out"
+              exit 1
+            }
+          echo "$out"
+          case "$out" in
+            *skipped*)
+              echo "::error::PostgresMigrationTests skipped; SITES_TEST_PG_DSN is not reaching the suite"
+              exit 1
+              ;;
+          esac
+          # "tests?" because unittest prints the singular for a single case:
+          # shrinking the class to one would have failed this guard, not the code.
+          echo "$out" | grep -qE '^Ran [1-9][0-9]* tests?' || {
+            echo "::error::PostgresMigrationTests ran no cases"
+            exit 1
+          }
+      - name: Run fail-closed deterministic benchmark
+        run: uv run --locked --extra dev --python ${{ matrix.python-version }} python scripts/run-benchmark.py --profile contract
+      - name: Audit Python dependencies
+        if: matrix.python-version == '3.12'
+        run: uvx --from pip-audit==2.9.0 pip-audit --disable-pip -r requirements.lock
+      - run: uv lock --check
+      - run: uv build --wheel
+      - name: Validate wheel contents
+        run: |
+          uv run --locked python - <<'PY'
+          import zipfile
+          from pathlib import Path
+          wheel = next(Path("dist").glob("*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              names = archive.namelist()
+          assert names.count("sites/safe_stdout.py") == 1, names
+          assert not [name for name in names if name.startswith("sites/test_")], names
+          assert "safe_stdout.py" not in names, names
+          PY
+      - run: docker build --check .
+
+  secrets:
+    name: Secret history scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install checksum-verified Gitleaks CLI
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --location --retry 3 \
+            --output "/tmp/${archive}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  /tmp/${archive}" | sha256sum --check --strict
+          tar --extract --gzip --file "/tmp/${archive}" --directory /tmp gitleaks
+          /tmp/gitleaks version
+      # fetch-depth: 0 above is load-bearing: on a shallow clone this scans the
+      # single fetched commit and reports "no leaks found" for the whole history.
+      - name: Scan complete Git history
+        run: /tmp/gitleaks git --redact --verbose --no-banner -c .gitleaks.toml .
+
+  console:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with: {persist-credentials: false}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: console
+      - run: npm run lint
+        working-directory: console
+      - run: npm run typecheck
+        working-directory: console
+      - run: npm run build
+        working-directory: console
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: console

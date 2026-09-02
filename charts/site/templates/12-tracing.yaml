@@ -1,0 +1,16 @@
+{{- if .Values.tracing.enabled }}
+{{- if not .Values.tracing.endpoint }}
+{{- fail "tracing.endpoint is required when tracing.enabled=true" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sites-tracing
+  namespace: {{ .Values.namespaces.control }}
+data:
+  SITES_OTLP_HTTP_ENDPOINT: {{ .Values.tracing.endpoint | quote }}
+  SITES_OTLP_QUEUE_SIZE: {{ .Values.tracing.queueSize | quote }}
+  SITES_OTLP_BATCH_SIZE: {{ .Values.tracing.batchSize | quote }}
+  SITES_OTLP_FLUSH_SECONDS: {{ .Values.tracing.flushSeconds | quote }}
+  SITES_OTLP_TIMEOUT_SECONDS: {{ .Values.tracing.timeoutSeconds | quote }}
+{{- end }}

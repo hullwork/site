@@ -1,0 +1,905 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
+export const LOCALE_STORAGE_KEY = "sites-console-locale";
+export const LOCALES = ["en", "zh-CN"] as const;
+
+export type Locale = (typeof LOCALES)[number];
+export type LocaleTag = "en-US" | "zh-CN";
+export type TranslationKey = keyof typeof en;
+export type TranslationValues = Record<string, string | number>;
+
+const en = {
+  "Grafana panels": "Grafana panels",
+  "Live panels from the operator's Grafana, proxied on this origin. Read-only.": "Live panels from the operator's Grafana, proxied on this origin. Read-only.",
+  "These panels are platform-wide. The metrics behind them carry no tenant dimension, so nothing here can be scoped to one tenant.": "These panels are platform-wide. The metrics behind them carry no tenant dimension, so nothing here can be scoped to one tenant.",
+  "{title} panel": "{title} panel",
+  "Language": "Language",
+  "English": "English",
+  "简体中文": "简体中文",
+  "Confirming admin session...": "Confirming admin session...",
+  "Skip to main content": "Skip to main content",
+  "Deployment control plane": "Deployment control plane",
+  "Mock": "Mock",
+  "Admin": "Admin",
+  "Console navigation": "Console navigation",
+  "Overview": "Overview",
+  "health and risks": "health and risks",
+  "Monitor": "Monitor",
+  "Cluster and application metrics": "Cluster and application metrics",
+  "Merchants": "Merchants",
+  "Organizations and total quotas": "Organizations and total quotas",
+  "Tenants": "Tenants",
+  "Identity and deployment quotas": "Identity and deployment quotas",
+  "Deployments": "Deployments",
+  "Runtime status and verification": "Runtime status and verification",
+  "Builds": "Builds",
+  "Artifacts and image references": "Artifacts and image references",
+  "Administrator session": "Administrator session",
+  "Exit administrator session": "Exit administrator session",
+  "Logged out.": "Logged out.",
+  "Log out": "Log out",
+  "Request not completed": "Request not completed",
+  "Close prompt": "Close prompt",
+  "Sites Console": "Sites Console",
+  "Multi-merchant site control-plane admin console. A platform admin token can manage every merchant and tenant.":
+    "Multi-merchant site control-plane admin console. A platform admin token can manage every merchant and tenant.",
+  "Admin token": "Admin token",
+  "Please fill in the admin token.": "Please fill in the admin token.",
+  "This token is not accepted by the control plane (401/403). Check SITES_SERVICE_TOKEN and try again.":
+    "This token is not accepted by the control plane (401/403). Check SITES_SERVICE_TOKEN and try again.",
+  "No /v1/merchants on control plane (404). This version of sites-api does not yet have merchant endpoints, so upgrade the control plane first.":
+    "No /v1/merchants on control plane (404). This version of sites-api does not yet have merchant endpoints, so upgrade the control plane first.",
+  "Verifying": "Verifying",
+  "Enter the console": "Enter the console",
+  "Sign in with your identity provider": "Sign in with your identity provider",
+  "Break-glass local login": "Break-glass local login",
+  "Local login is disabled on this control plane.": "Local login is disabled on this control plane.",
+  "The session is an HttpOnly cookie held by the control plane. The token is sent once, is never stored in the browser, and every local login is written to the audit log.":
+    "The session is an HttpOnly cookie held by the control plane. The token is sent once, is never stored in the browser, and every local login is written to the audit log.",
+  "Mock data mode is active. Enter": "Mock data mode is active. Enter",
+  "to reproduce 401.": "to reproduce 401.",
+  "Pending": "Pending",
+  "Building": "Building",
+  "Deploying": "Deploying",
+  "Running": "Running",
+  "Failed": "Failed",
+  "Deleting": "Deleting",
+  "Deleted": "Deleted",
+  "Unknown": "Unknown",
+  "Active replicas": "Active replicas",
+  "Dormant": "Dormant",
+  "Scaling state not reported": "Scaling state not reported",
+  "Unknown scaling state": "Unknown scaling state",
+  "Unknown time": "Unknown time",
+  "just now": "just now",
+  "{count} minute ago": "{count} minute ago",
+  "{count} minutes ago": "{count} minutes ago",
+  "{count} hour ago": "{count} hour ago",
+  "{count} hours ago": "{count} hours ago",
+  "{count} second": "{count} second",
+  "{count} seconds": "{count} seconds",
+  "{count} minute": "{count} minute",
+  "{count} minutes": "{count} minutes",
+  "{count} hour": "{count} hour",
+  "{count} hours": "{count} hours",
+  "Not reported": "Not reported",
+  "never succeeded": "never succeeded",
+  "{count} seconds ago": "{count} seconds ago",
+  "No verification evidence in aggregate view": "No verification evidence in aggregate view",
+  "Passed (HTTP {status})": "Passed (HTTP {status})",
+  "Failed (HTTP {status})": "Failed (HTTP {status})",
+  "Failed ({reason})": "Failed ({reason})",
+  "control plane could not reach the site": "control plane could not reach the site",
+  "Refresh": "Refresh",
+  "Refreshing": "Refreshing",
+  "Copy": "Copy",
+  "Copied": "Copied",
+  "Replica count not reported": "Replica count not reported",
+  "{count} replica": "{count} replica",
+  "{count} replicas": "{count} replicas",
+  "Merchant": "Merchant",
+  "Tenant ID": "Tenant ID",
+  "Deployment cap": "Deployment cap",
+  "Public route limit": "Public route limit",
+  "Created": "Created",
+  "Status": "Status",
+  "Operation": "Operation",
+  "Enabled": "Enabled",
+  "Disabled": "Disabled",
+  "Loading": "Loading",
+  "Cancel": "Cancel",
+  "Save": "Save",
+  "Change quota": "Change quota",
+  "All merchants": "All merchants",
+  "Please select": "Please select",
+  "{enabled} enabled · {disabled} disabled": "{enabled} enabled · {disabled} disabled",
+  "Updated {time}": "Updated {time}",
+  "Showing {visible} / {total}": "Showing {visible} / {total}",
+  "TENANT ACCESS": "TENANT ACCESS",
+  "Tenant IDs are unique within a merchant. Allocate deployment and public-route quotas here, and rotate tokens that are shown only once.":
+    "Tenant IDs are unique within a merchant. Allocate deployment and public-route quotas here, and rotate tokens that are shown only once.",
+  "New tenant": "New tenant",
+  "Search tenants": "Search tenants",
+  "Search for merchant or tenant ID": "Search for merchant or tenant ID",
+  "The only one in the merchant": "The only one in the merchant",
+  "Create and issue token": "Create and issue token",
+  "No matching tenant": "No matching tenant",
+  "There are no tenants on the platform yet": "There are no tenants on the platform yet",
+  "Adjust the search terms or merchant filter.": "Adjust the search terms or merchant filter.",
+  "First create a merchant, then issue tenant tokens and allocate deployment quotas.":
+    "First create a merchant, then issue tenant tokens and allocate deployment quotas.",
+  "Merchant must be selected and Tenant ID must be filled in.":
+    "Merchant must be selected and Tenant ID must be filled in.",
+  "The deployment limit must be an integer no less than 1.":
+    "The deployment limit must be an integer no less than 1.",
+  "The public route limit must be an integer not less than 0.":
+    "The public route limit must be an integer not less than 0.",
+  "Quota must be an integer: deployment limit ≥ 1, public route limit ≥ 0.":
+    "Quota must be an integer: deployment limit ≥ 1, public route limit ≥ 0.",
+  "Rotate the token for {owner}? The old token becomes invalid immediately. If the tenant is disabled, rotation also re-enables it.":
+    "Rotate the token for {owner}? The old token becomes invalid immediately. If the tenant is disabled, rotation also re-enables it.",
+  "Disable {owner}? This revokes its credentials but does not delete existing workloads.":
+    "Disable {owner}? This revokes its credentials but does not delete existing workloads.",
+  "Reissue token": "Reissue token",
+  "Deactivate": "Deactivate",
+  "Tenant token": "Tenant token",
+  "The tenant was originally deactivated and has been reactivated by issuing a token.":
+    "The tenant was originally deactivated and has been reactivated by issuing a token.",
+  "IDENTITY & QUOTAS": "IDENTITY & QUOTAS",
+  "Manage first-tier identities, total platform quotas, and resource packages for each tenant namespace. Deactivation only revokes access and does not delete existing workloads.":
+    "Manage first-tier identities, total platform quotas, and resource packages for each tenant namespace. Deactivation only revokes access and does not delete existing workloads.",
+  "Create a new merchant": "Create a new merchant",
+  "Search for merchants": "Search for merchants",
+  "Search for merchant ID or display name": "Search for merchant ID or display name",
+  "Merchant ID": "Merchant ID",
+  "1-31 lowercase letters, numbers, or hyphens": "1-31 lowercase letters, numbers, or hyphens",
+  "Display name": "Display name",
+  "Tenant cap": "Tenant cap",
+  "Create and issue key": "Create and issue key",
+  "After creation, the plaintext API key is only displayed once, and the control plane only saves its sha256 digest.":
+    "After creation, the plaintext API key is only displayed once, and the control plane only saves its sha256 digest.",
+  "No matching merchants": "No matching merchants",
+  "No merchant yet": "No merchant yet",
+  "Adjust your search terms and try again.": "Adjust your search terms and try again.",
+  "Tenant tokens can be issued and deployment quotas allocated after a new merchant is created.":
+    "Tenant tokens can be issued and deployment quotas allocated after a new merchant is created.",
+  "Tenant usage": "Tenant usage",
+  "Deployment usage": "Deployment usage",
+  "Resource cap": "Resource cap",
+  "CPU/Memory/Pod": "CPU/Memory/Pod",
+  "CPU cap": "CPU cap",
+  "Memory limit": "Memory limit",
+  "Maximum number of Pods": "Maximum number of Pods",
+  "Merchant ID and display name are required.": "Merchant ID and display name are required.",
+  "Both quotas must be integers no less than 1.": "Both quotas must be integers no less than 1.",
+  "Quota must be an integer no less than 1.": "Quota must be an integer no less than 1.",
+  "All three resource limit items must be filled in.": "All three resource limit items must be filled in.",
+  "Rotate the API key for merchant \"{name}\"? The old key becomes invalid immediately, and every integration using it will receive 401 responses.":
+    "Rotate the API key for merchant \"{name}\"? The old key becomes invalid immediately, and every integration using it will receive 401 responses.",
+  "Disable merchant \"{name}\"? Tokens for all tenants under it also become invalid, but deployed sites are not deleted.":
+    "Disable merchant \"{name}\"? Tokens for all tenants under it also become invalid, but deployed sites are not deleted.",
+  "Rotate key": "Rotate key",
+  "Merchant API key": "Merchant API key",
+  "Merchant {id}": "Merchant {id}",
+  "Close": "Close",
+  "The browser has denied clipboard access. Please manually select the text below and copy it.":
+    "The browser has denied clipboard access. Please manually select the text below and copy it.",
+  "Shown only this time": "Shown only this time",
+  "This value cannot be viewed again after the dialog closes. The control plane stores only its SHA-256 digest, so a lost value must be replaced. Save it in your secret manager now.":
+    "This value cannot be viewed again after the dialog closes. The control plane stores only its SHA-256 digest, so a lost value must be replaced. Save it in your secret manager now.",
+  "Owner": "Owner",
+  "I have saved": "I have saved",
+  "RUNTIME OPERATIONS": "RUNTIME OPERATIONS",
+  "View cross-merchant deployment snapshots, control-plane verification evidence, and public access URLs. Status comes from database snapshots and is not presented as a live Kubernetes view.":
+    "View cross-merchant deployment snapshots, control-plane verification evidence, and public access URLs. Status comes from database snapshots and is not presented as a live Kubernetes view.",
+  "Not updated yet": "Not updated yet",
+  "snapshot": "snapshot",
+  "Never synced": "Never synced",
+  "Deployment summary": "Deployment summary",
+  "Active workloads": "Active workloads",
+  "{count} lifecycle Running": "{count} lifecycle Running",
+  "Dormant sites": "Dormant sites",
+  "0 replicas; activator wakes them on access": "0 replicas; activator wakes them on access",
+  "Advancing": "Advancing",
+  "Wait, build, deploy, or delete": "Wait, build, deploy, or delete",
+  "Check the status reason": "Check the status reason",
+  "No recorded failures": "No recorded failures",
+  "Verification passed": "Verification passed",
+  "Control-plane HTTP probe evidence": "Control-plane HTTP probe evidence",
+  "Snapshot records": "Snapshot records",
+  "Lifecycle Running and ready: {count}": "Lifecycle Running and ready: {count}",
+  "Search deployment": "Search deployment",
+  "Search for services, tenants, images, or status reasons": "Search for services, tenants, images, or status reasons",
+  "Scaling state": "Scaling state",
+  "All status": "All status",
+  "Phase": "Phase",
+  "All phases": "All phases",
+  "Status snapshot has stopped updating": "Status snapshot has stopped updating",
+  "The Sites control plane has not synced Kubernetes state for {age}. ":
+    "The Sites control plane has not synced Kubernetes state for {age}. ",
+  "The Sites control plane has not completed a Kubernetes synchronization.":
+    "The Sites control plane has not completed a Kubernetes synchronization.",
+  "The phase and access URL below may not match reality. The admin console does not query Kubernetes directly; inspect the control-plane synchronization thread.":
+    "The phase and access URL below may not match reality. The admin console does not query Kubernetes directly; inspect the control-plane synchronization thread.",
+  "Reading deployment snapshot": "Reading deployment snapshot",
+  "No matching deployment": "No matching deployment",
+  "Not yet deployed on the platform": "Not yet deployed on the platform",
+  "Adjust search term, merchant, phase or flex status filters.":
+    "Adjust search term, merchant, phase or flex status filters.",
+  "Deployments submitted via CLI, MCP, or Work UI will appear here.":
+    "Deployments submitted via CLI, MCP, or Work UI will appear here.",
+  "Sites have not reported detailed status yet": "Sites have not reported detailed status yet",
+  "control-plane verification passed": "control-plane verification passed",
+  "control-plane verification failed": "control-plane verification failed",
+  "No verification evidence returned": "No verification evidence returned",
+  "Open (cold start)": "Open (cold start)",
+  "Open": "Open",
+  "Run details": "Run details",
+  "Resource ID": "Resource ID",
+  "Copy resource ID": "Copy resource ID",
+  "Image": "Image",
+  "Copy image reference": "Copy image reference",
+  "Port/Health Check": "Port/Health Check",
+  "Revision": "Revision",
+  "scale-to-zero enabled": "scale-to-zero enabled",
+  "always-on replicas": "always-on replicas",
+  "Access URL": "Access URL",
+  "{url} (not http/https; link blocked)": "{url} (not http/https; link blocked)",
+  "Control plane verification": "Control plane verification",
+  "Response summary": "Response summary",
+  "Submit summary": "Submit summary",
+  "Workload Registry": "Workload Registry",
+  "Immutable external image": "Immutable external image",
+  "External Registry": "External Registry",
+  "BUILD & ARTIFACTS": "BUILD & ARTIFACTS",
+  "Builds and images": "Builds and images",
+  "Relate SiteBuilds, build artifacts, and deployment references so Registry manifests are no longer mistaken for platform-wide images.":
+    "Relate SiteBuilds, build artifacts, and deployment references so Registry manifests are no longer mistaken for platform-wide images.",
+  "5-second polling": "5-second polling",
+  "20-second polling": "20-second polling",
+  "Build and Image Summary": "Build and Image Summary",
+  "Active builds": "Active builds",
+  "Failed builds": "Failed builds",
+  "{count} current SiteBuilds": "{count} current SiteBuilds",
+  "Expand a build to see the reason": "Expand a build to see the reason",
+  "No failed builds": "No failed builds",
+  "Registry artifacts": "Registry artifacts",
+  "{count} repositories": "{count} repositories",
+  "Deployment image references": "Deployment image references",
+  "{count} matched to local repositories": "{count} matched to local repositories",
+  "Build and image views": "Build and image views",
+  "Build tasks": "Build tasks",
+  "Registry": "Registry",
+  "Deployment references": "Deployment references",
+  "Search builds and images": "Search builds and images",
+  "Search services, repositories, tags or digests": "Search services, repositories, tags or digests",
+  "Workload Registry is unreachable": "Workload Registry is unreachable",
+  "Registry is unreachable, the control plane does not give a reason":
+    "Registry is unreachable, the control plane does not give a reason",
+  "Digest only shows partial results": "Digest only shows partial results",
+  "Query the number of times or time budget for triggering the Registry; an empty Digest does not mean that the image is damaged.":
+    "Query the number of times or time budget for triggering the Registry; an empty Digest does not mean that the image is damaged.",
+  "Reading builds and images": "Reading builds and images",
+  "Unnamed service": "Unnamed service",
+  "The control plane has not reported build status yet": "The control plane has not reported build status yet",
+  "Build ID": "Build ID",
+  "BuildKit Job": "BuildKit Job",
+  "Not created yet": "Not created yet",
+  "Output image": "Output image",
+  "Digest": "Digest",
+  "Not produced yet": "Not produced yet",
+  "Copy digest": "Copy digest",
+  "No matching builds": "No matching builds",
+  "No SiteBuilds yet": "No SiteBuilds yet",
+  "This view shows current SiteBuilds, not build history; artifacts and running images are available on other tabs.":
+    "This view shows current SiteBuilds, not build history; artifacts and running images are available on other tabs.",
+  "View deployment references": "View deployment references",
+  "View Registry artifacts": "View Registry artifacts",
+  "Deployable image": "Deployable image",
+  "Empty repository": "Empty repository",
+  "Deployment reference": "Deployment reference",
+  "{count} current deployments": "{count} current deployments",
+  "Not currently associated": "Not currently associated",
+  "The repository exists, but Registry returned no usable tags. The build may have been interrupted or the artifact cleaned up.":
+    "The repository exists, but Registry returned no usable tags. The build may have been interrupted or the artifact cleaned up.",
+  "No matching Registry artifacts": "No matching Registry artifacts",
+  "Workload Registry is empty": "Workload Registry is empty",
+  "After a source build is pushed successfully, its repository, tag, and digest appear here.":
+    "After a source build is pushed successfully, its repository, tag, and digest appear here.",
+  "Copy the full image reference": "Copy the full image reference",
+  "No matching deployment image": "No matching deployment image",
+  "No deployment image reference": "No deployment image reference",
+  "This is from the deployment snapshot, including local Registry and external Registry, not equal to the local repository directory.":
+    "This is from the deployment snapshot, including local Registry and external Registry, not equal to the local repository directory.",
+  "Normal": "Normal",
+  "Abnormal": "Abnormal",
+  "The control plane does not give a reason": "The control plane does not give a reason",
+  "Summarizing control plane status": "Summarizing control plane status",
+  "Health, Tenants, Deployments, Builds and Registry": "Health, Tenants, Deployments, Builds and Registry",
+  "OPERATIONS OVERVIEW": "OPERATIONS OVERVIEW",
+  "Platform overview": "Platform overview",
+  "Prioritize what needs work from control plane dependencies, tenant quotas, and workload status.":
+    "Prioritize what needs work from control plane dependencies, tenant quotas, and workload status.",
+  "Platform key metrics": "Platform key metrics",
+  "Control plane dependencies": "Control plane dependencies",
+  "Failed deployments": "Failed deployments",
+  "1 probe needs attention": "1 probe needs attention",
+  "{count} probes need attention": "{count} probes need attention",
+  "All probes are normal": "All probes are normal",
+  "Enabled merchants": "Enabled merchants",
+  "{count} total merchants": "{count} total merchants",
+  "{count} disabled": "{count} disabled",
+  "All credentials enabled": "All credentials enabled",
+  "{count} dormant · {records} snapshot records": "{count} dormant · {records} snapshot records",
+  "{count} local repositories": "{count} local repositories",
+  "Need attention": "Need attention",
+  "The control plane has actionable signals": "The control plane has actionable signals",
+  "1 dependency probe failing": "1 dependency probe failing",
+  "{count} dependency probes failing": "{count} dependency probes failing",
+  "See errors and recovery directions below": "See errors and recovery directions below",
+  "1 failed deployment": "1 failed deployment",
+  "{count} failed deployments": "{count} failed deployments",
+  "Filter by failed phase and expand run details": "Filter by failed phase and expand run details",
+  "Deployment snapshot is stale": "Deployment snapshot is stale",
+  "The control plane has not completed its first sync": "The control plane has not completed its first sync",
+  "No sync for {count} seconds": "No sync for {count} seconds",
+  "CONTROL PLANE": "CONTROL PLANE",
+  "Dependency health": "Dependency health",
+  "Auto-refreshes every {seconds} seconds": "Auto-refreshes every {seconds} seconds",
+  "Metadata database": "Metadata database",
+  "Backend not reported": "Backend not reported",
+  "Last reconcile": "Last reconcile",
+  "Workload registry": "Workload registry",
+  "Kubernetes API": "Kubernetes API",
+  "Version not reported": "Version not reported",
+  "RECENT ACTIVITY": "RECENT ACTIVITY",
+  "Recently deployed": "Recently deployed",
+  "View all": "View all",
+  "There are no deployment records on the platform yet.": "There are no deployment records on the platform yet.",
+  "Operator": "Operator",
+  "OBSERVABILITY": "OBSERVABILITY",
+  "Metrics monitoring": "Metrics monitoring",
+  "Inspect resource and traffic trends collected from the Sites cluster. Switch between the cluster overview and individual applications; data is retained for 24 hours.":
+    "Inspect resource and traffic trends collected from the Sites cluster. Switch between the cluster overview and individual applications; data is retained for 24 hours.",
+  "Sampled at {time}": "Sampled at {time}",
+  "Waiting for first sample": "Waiting for first sample",
+  "Monitoring scope and time": "Monitoring scope and time",
+  "Monitoring scope": "Monitoring scope",
+  "Cluster": "Cluster",
+  "Single application": "Single application",
+  "Application": "Application",
+  "Select app": "Select app",
+  "Time range": "Time range",
+  "Metrics refresh failed": "Metrics refresh failed",
+  "{error}. Charts retain the last successful data.": "{error}. Charts retain the last successful data.",
+  "The metric backend is temporarily unavailable": "The metric backend is temporarily unavailable",
+  "Prometheus is not ready or accessible, and the console does not replace real samples with imputed values.":
+    "Prometheus is not ready or accessible, and the console does not replace real samples with imputed values.",
+  "Reading metrics": "Reading metrics",
+  "There are no apps to monitor yet": "There are no apps to monitor yet",
+  "Once you create your application, you can view its resources, requests, error rates, and latency trends.":
+    "Once you create your application, you can view its resources, requests, error rates, and latency trends.",
+  "Current metric": "Current metric",
+  "CPU": "CPU",
+  "Capacity": "Capacity",
+  "Memory": "Memory",
+  "Working set": "Working set",
+  "Request rate": "Request rate",
+  "Envoy has completed the request": "Envoy has completed the request",
+  "P95 response": "P95 response",
+  "Error rate": "Error rate",
+  "Metric trend": "Metric trend",
+  "No sample yet": "No sample yet",
+  "{label}: current {value}, {count} samples.": "{label}: current {value}, {count} samples.",
+  "{count} samples": "{count} samples",
+  "There are no samples yet for the selected time period": "There are no samples yet for the selected time period",
+  "View datasheet": "View datasheet",
+  "Time": "Time",
+  "Value": "Value",
+  "CPU usage": "CPU usage",
+  "Memory usage": "Memory usage",
+  "4xx / 5xx error rate": "4xx / 5xx error rate",
+  "P95 response time": "P95 response time",
+} as const;
+
+const zhCN: Record<TranslationKey, string> = {
+  "Grafana panels": "Grafana 面板",
+  "Live panels from the operator's Grafana, proxied on this origin. Read-only.": "运营方 Grafana 的实时面板，经本站同源反代，只读。",
+  "These panels are platform-wide. The metrics behind them carry no tenant dimension, so nothing here can be scoped to one tenant.": "这些面板是平台级的。背后的指标不带租户维度，因此无法按单个租户筛选。",
+  "{title} panel": "{title} 面板",
+  "Language": "语言",
+  "English": "English",
+  "简体中文": "简体中文",
+  "Confirming admin session...": "正在确认管理员会话…",
+  "Skip to main content": "跳到主要内容",
+  "Deployment control plane": "部署控制面",
+  "Mock": "模拟",
+  "Admin": "管理员",
+  "Console navigation": "控制台导航",
+  "Overview": "总览",
+  "health and risks": "健康与风险",
+  "Monitor": "监控",
+  "Cluster and application metrics": "集群与应用指标",
+  "Merchants": "商户",
+  "Organizations and total quotas": "组织与总配额",
+  "Tenants": "租户",
+  "Identity and deployment quotas": "身份与部署配额",
+  "Deployments": "部署",
+  "Runtime status and verification": "运行状态与验证",
+  "Builds": "构建",
+  "Artifacts and image references": "产物与镜像引用",
+  "Administrator session": "管理员会话",
+  "Exit administrator session": "退出管理员会话",
+  "Logged out.": "已退出登录。",
+  "Log out": "退出登录",
+  "Request not completed": "请求未完成",
+  "Close prompt": "关闭提示",
+  "Sites Console": "Sites 控制台",
+  "Multi-merchant site control-plane admin console. A platform admin token can manage every merchant and tenant.":
+    "多商户站点控制面管理端。平台管理员 token 可管理全部商户与租户。",
+  "Admin token": "管理员 token",
+  "Please fill in the admin token.": "请填写管理员 token。",
+  "This token is not accepted by the control plane (401/403). Check SITES_SERVICE_TOKEN and try again.":
+    "控制面未接受此 token（401/403）。请检查 SITES_SERVICE_TOKEN 后重试。",
+  "No /v1/merchants on control plane (404). This version of sites-api does not yet have merchant endpoints, so upgrade the control plane first.":
+    "控制面没有 /v1/merchants（404）。此版本的 sites-api 尚未包含多商户端点，请先升级控制面。",
+  "Verifying": "正在验证",
+  "Enter the console": "进入控制台",
+  "Sign in with your identity provider": "使用身份提供方登录",
+  "Break-glass local login": "本地应急登录",
+  "Local login is disabled on this control plane.": "该控制面已关闭本地登录。",
+  "The session is an HttpOnly cookie held by the control plane. The token is sent once, is never stored in the browser, and every local login is written to the audit log.":
+    "会话是控制面签发的 HttpOnly cookie。token 只发送一次，不留在浏览器里，每次本地登录都会写入审计日志。",
+  "Mock data mode is active. Enter": "Mock 数据模式已启用。输入",
+  "to reproduce 401.": "可复现 401。",
+  "Pending": "等待部署",
+  "Building": "构建中",
+  "Deploying": "部署中",
+  "Running": "运行中",
+  "Failed": "失败",
+  "Deleting": "删除中",
+  "Deleted": "已删除",
+  "Unknown": "未知",
+  "Active replicas": "活跃副本",
+  "Dormant": "休眠",
+  "Scaling state not reported": "未报告伸缩状态",
+  "Unknown scaling state": "伸缩状态未知",
+  "Unknown time": "时间未知",
+  "just now": "刚刚",
+  "{count} minute ago": "{count} 分钟前",
+  "{count} minutes ago": "{count} 分钟前",
+  "{count} hour ago": "{count} 小时前",
+  "{count} hours ago": "{count} 小时前",
+  "{count} second": "{count} 秒",
+  "{count} seconds": "{count} 秒",
+  "{count} minute": "{count} 分钟",
+  "{count} minutes": "{count} 分钟",
+  "{count} hour": "{count} 小时",
+  "{count} hours": "{count} 小时",
+  "Not reported": "未报告",
+  "never succeeded": "从未成功",
+  "{count} seconds ago": "{count} 秒前",
+  "No verification evidence in aggregate view": "聚合视图未返回验证证据",
+  "Passed (HTTP {status})": "通过（HTTP {status}）",
+  "Failed (HTTP {status})": "未通过（HTTP {status}）",
+  "Failed ({reason})": "未通过（{reason}）",
+  "control plane could not reach the site": "控制面未能访问站点",
+  "Refresh": "刷新",
+  "Refreshing": "正在刷新",
+  "Copy": "复制",
+  "Copied": "已复制",
+  "Replica count not reported": "未报告副本数",
+  "{count} replica": "{count} 个副本",
+  "{count} replicas": "{count} 个副本",
+  "Merchant": "商户",
+  "Tenant ID": "租户 ID",
+  "Deployment cap": "部署上限",
+  "Public route limit": "公开路由上限",
+  "Created": "创建时间",
+  "Status": "状态",
+  "Operation": "操作",
+  "Enabled": "已启用",
+  "Disabled": "已停用",
+  "Loading": "正在加载",
+  "Cancel": "取消",
+  "Save": "保存",
+  "Change quota": "调整配额",
+  "All merchants": "全部商户",
+  "Please select": "请选择",
+  "{enabled} enabled · {disabled} disabled": "{enabled} 个启用 · {disabled} 个停用",
+  "Updated {time}": "更新于 {time}",
+  "Showing {visible} / {total}": "显示 {visible} / {total}",
+  "TENANT ACCESS": "租户访问",
+  "Tenant IDs are unique within a merchant. Allocate deployment and public-route quotas here, and rotate tokens that are shown only once.":
+    "租户 ID 只在商户内唯一。在这里分配部署与公开路由配额，并轮换仅展示一次的访问 token。",
+  "New tenant": "新建租户",
+  "Search tenants": "搜索租户",
+  "Search for merchant or tenant ID": "搜索商户或租户 ID",
+  "The only one in the merchant": "商户内唯一",
+  "Create and issue token": "创建并签发 token",
+  "No matching tenant": "没有匹配的租户",
+  "There are no tenants on the platform yet": "平台上还没有租户",
+  "Adjust the search terms or merchant filter.": "请调整搜索词或商户筛选条件。",
+  "First create a merchant, then issue tenant tokens and allocate deployment quotas.":
+    "请先创建商户，再签发租户 token 并分配部署配额。",
+  "Merchant must be selected and Tenant ID must be filled in.":
+    "必须选择商户并填写租户 ID。",
+  "The deployment limit must be an integer no less than 1.":
+    "部署上限必须是不小于 1 的整数。",
+  "The public route limit must be an integer not less than 0.":
+    "公开路由上限必须是不小于 0 的整数。",
+  "Quota must be an integer: deployment limit ≥ 1, public route limit ≥ 0.":
+    "配额必须是整数：部署上限 ≥ 1，公开路由上限 ≥ 0。",
+  "Rotate the token for {owner}? The old token becomes invalid immediately. If the tenant is disabled, rotation also re-enables it.":
+    "为 {owner} 轮换 token？旧 token 会立即失效；如果租户已停用，轮换会同时重新启用。",
+  "Disable {owner}? This revokes its credentials but does not delete existing workloads.":
+    "停用 {owner}？这会吊销凭证，但不会删除既有工作负载。",
+  "Reissue token": "换发 token",
+  "Deactivate": "停用",
+  "Tenant token": "租户 token",
+  "The tenant was originally deactivated and has been reactivated by issuing a token.":
+    "该租户原本处于停用状态，签发 token 时已重新启用。",
+  "IDENTITY & QUOTAS": "身份与配额",
+  "Manage first-tier identities, total platform quotas, and resource packages for each tenant namespace. Deactivation only revokes access and does not delete existing workloads.":
+    "管理一级身份、平台总配额以及每个租户 Namespace 的资源套餐。停用只吊销访问权限，不删除既有工作负载。",
+  "Create a new merchant": "新建商户",
+  "Search for merchants": "搜索商户",
+  "Search for merchant ID or display name": "搜索商户 ID 或显示名称",
+  "Merchant ID": "商户 ID",
+  "1-31 lowercase letters, numbers, or hyphens": "1-31 位小写字母、数字或连字符",
+  "Display name": "显示名称",
+  "Tenant cap": "租户上限",
+  "Create and issue key": "创建并签发 key",
+  "After creation, the plaintext API key is only displayed once, and the control plane only saves its sha256 digest.":
+    "创建后，明文 API key 只展示一次；控制面只保存其 SHA-256 摘要。",
+  "No matching merchants": "没有匹配的商户",
+  "No merchant yet": "还没有商户",
+  "Adjust your search terms and try again.": "请调整搜索词后重试。",
+  "Tenant tokens can be issued and deployment quotas allocated after a new merchant is created.":
+    "创建商户后即可签发租户 token 并分配部署配额。",
+  "Tenant usage": "租户用量",
+  "Deployment usage": "部署用量",
+  "Resource cap": "资源上限",
+  "CPU/Memory/Pod": "CPU/内存/Pod",
+  "CPU cap": "CPU 上限",
+  "Memory limit": "内存上限",
+  "Maximum number of Pods": "Pod 数上限",
+  "Merchant ID and display name are required.": "必须填写商户 ID 和显示名称。",
+  "Both quotas must be integers no less than 1.": "两个配额都必须是不小于 1 的整数。",
+  "Quota must be an integer no less than 1.": "配额必须是不小于 1 的整数。",
+  "All three resource limit items must be filled in.": "三项资源上限都必须填写。",
+  "Rotate the API key for merchant \"{name}\"? The old key becomes invalid immediately, and every integration using it will receive 401 responses.":
+    "轮换商户 “{name}” 的 API key？旧 key 会立即失效，所有正在使用它的集成都会收到 401。",
+  "Disable merchant \"{name}\"? Tokens for all tenants under it also become invalid, but deployed sites are not deleted.":
+    "停用商户 “{name}”？其名下所有租户的 token 都会失效，但已部署站点不会被删除。",
+  "Rotate key": "轮换 key",
+  "Merchant API key": "商户 API key",
+  "Merchant {id}": "商户 {id}",
+  "Close": "关闭",
+  "The browser has denied clipboard access. Please manually select the text below and copy it.":
+    "浏览器已拒绝剪贴板访问。请手动选中下方文本并复制。",
+  "Shown only this time": "仅本次展示",
+  "This value cannot be viewed again after the dialog closes. The control plane stores only its SHA-256 digest, so a lost value must be replaced. Save it in your secret manager now.":
+    "弹窗关闭后无法再次查看。控制面只保存 SHA-256 摘要，丢失后只能重新签发。请立即保存到密钥管理器。",
+  "Owner": "归属",
+  "I have saved": "我已保存",
+  "RUNTIME OPERATIONS": "运行运营",
+  "View cross-merchant deployment snapshots, control-plane verification evidence, and public access URLs. Status comes from database snapshots and is not presented as a live Kubernetes view.":
+    "查看跨商户部署快照、控制面验证证据与公开访问 URL。状态来自数据库快照，不会被伪装成实时 Kubernetes 视图。",
+  "Not updated yet": "尚未更新",
+  "snapshot": "快照",
+  "Never synced": "从未同步",
+  "Deployment summary": "部署概览",
+  "Active workloads": "活跃工作负载",
+  "{count} lifecycle Running": "{count} 个生命周期 Running",
+  "Dormant sites": "休眠站点",
+  "0 replicas; activator wakes them on access": "0 副本；访问时由 activator 唤醒",
+  "Advancing": "推进中",
+  "Wait, build, deploy, or delete": "等待、构建、部署或删除",
+  "Check the status reason": "请检查状态原因",
+  "No recorded failures": "暂无失败记录",
+  "Verification passed": "验证通过",
+  "Control-plane HTTP probe evidence": "控制面 HTTP 探测证据",
+  "Snapshot records": "快照记录",
+  "Lifecycle Running and ready: {count}": "生命周期 Running 且 ready：{count}",
+  "Search deployment": "搜索部署",
+  "Search for services, tenants, images, or status reasons": "搜索服务、租户、镜像或状态原因",
+  "Scaling state": "伸缩状态",
+  "All status": "全部状态",
+  "Phase": "相位",
+  "All phases": "全部相位",
+  "Status snapshot has stopped updating": "状态快照已停止更新",
+  "The Sites control plane has not synced Kubernetes state for {age}. ":
+    "Sites 控制面已有 {age} 未同步 Kubernetes 状态。",
+  "The Sites control plane has not completed a Kubernetes synchronization.":
+    "Sites 控制面尚未完成首次 Kubernetes 同步。",
+  "The phase and access URL below may not match reality. The admin console does not query Kubernetes directly; inspect the control-plane synchronization thread.":
+    "下方相位与访问 URL 可能与实际不符。管理控制台不直接回源 Kubernetes；请检查控制面的同步线程。",
+  "Reading deployment snapshot": "正在读取部署快照",
+  "No matching deployment": "没有匹配的部署",
+  "Not yet deployed on the platform": "平台上还没有部署",
+  "Adjust search term, merchant, phase or flex status filters.":
+    "请调整搜索词、商户、相位或伸缩状态筛选。",
+  "Deployments submitted via CLI, MCP, or Work UI will appear here.":
+    "通过 CLI、MCP 或 Work UI 提交的部署会显示在这里。",
+  "Sites have not reported detailed status yet": "站点尚未报告详细状态",
+  "control-plane verification passed": "控制面验证通过",
+  "control-plane verification failed": "控制面验证未通过",
+  "No verification evidence returned": "未返回验证证据",
+  "Open (cold start)": "打开（冷启动）",
+  "Open": "打开",
+  "Run details": "运行详情",
+  "Resource ID": "资源 ID",
+  "Copy resource ID": "复制资源 ID",
+  "Image": "镜像",
+  "Copy image reference": "复制镜像引用",
+  "Port/Health Check": "端口/健康检查",
+  "Revision": "版本",
+  "scale-to-zero enabled": "已启用 scale-to-zero",
+  "always-on replicas": "常驻副本",
+  "Access URL": "访问 URL",
+  "{url} (not http/https; link blocked)": "{url}（非 http/https，已禁止跳转）",
+  "Control plane verification": "控制面验证",
+  "Response summary": "响应摘要",
+  "Submit summary": "提交摘要",
+  "Workload Registry": "工作负载 Registry",
+  "Immutable external image": "不可变外部镜像",
+  "External Registry": "外部 Registry",
+  "BUILD & ARTIFACTS": "构建与产物",
+  "Builds and images": "构建与镜像",
+  "Relate SiteBuilds, build artifacts, and deployment references so Registry manifests are no longer mistaken for platform-wide images.":
+    "将 SiteBuild、构建产物与部署引用放在同一视图中，避免把 Registry manifest 误读成平台级镜像。",
+  "5-second polling": "5 秒轮询",
+  "20-second polling": "20 秒轮询",
+  "Build and Image Summary": "构建与镜像概览",
+  "Active builds": "活跃构建",
+  "Failed builds": "失败构建",
+  "{count} current SiteBuilds": "{count} 个当前 SiteBuild",
+  "Expand a build to see the reason": "展开构建可查看原因",
+  "No failed builds": "暂无失败构建",
+  "Registry artifacts": "Registry 产物",
+  "{count} repositories": "{count} 个仓库",
+  "Deployment image references": "部署镜像引用",
+  "{count} matched to local repositories": "{count} 个可关联到本地仓库",
+  "Build and image views": "构建与镜像视图",
+  "Build tasks": "构建任务",
+  "Registry": "镜像仓库",
+  "Deployment references": "部署引用",
+  "Search builds and images": "搜索构建与镜像",
+  "Search services, repositories, tags or digests": "搜索服务、仓库、Tag 或 Digest",
+  "Workload Registry is unreachable": "工作负载 Registry 不可达",
+  "Registry is unreachable, the control plane does not give a reason":
+    "Registry 不可达，控制面未给出原因",
+  "Digest only shows partial results": "Digest 仅显示部分结果",
+  "Query the number of times or time budget for triggering the Registry; an empty Digest does not mean that the image is damaged.":
+    "已触发 Registry 的次数或时间预算限制；Digest 为空并不代表镜像损坏。",
+  "Reading builds and images": "正在读取构建与镜像",
+  "Unnamed service": "未命名服务",
+  "The control plane has not reported build status yet": "控制面尚未报告构建状态",
+  "Build ID": "构建 ID",
+  "BuildKit Job": "BuildKit Job",
+  "Not created yet": "尚未创建",
+  "Output image": "输出镜像",
+  "Digest": "Digest",
+  "Not produced yet": "尚未产出",
+  "Copy digest": "复制 Digest",
+  "No matching builds": "没有匹配的构建",
+  "No SiteBuilds yet": "暂无 SiteBuild",
+  "This view shows current SiteBuilds, not build history; artifacts and running images are available on other tabs.":
+    "这里展示当前 SiteBuild 而非历史构建；产物和运行镜像可在其他标签页确认。",
+  "View deployment references": "查看部署引用",
+  "View Registry artifacts": "查看 Registry 产物",
+  "Deployable image": "可部署镜像",
+  "Empty repository": "空仓库",
+  "Deployment reference": "部署引用",
+  "{count} current deployments": "{count} 个当前部署",
+  "Not currently associated": "当前未关联",
+  "The repository exists, but Registry returned no usable tags. The build may have been interrupted or the artifact cleaned up.":
+    "仓库存在，但 Registry 未返回可用 Tag。构建可能中断，或产物已被清理。",
+  "No matching Registry artifacts": "没有匹配的 Registry 产物",
+  "Workload Registry is empty": "工作负载 Registry 为空",
+  "After a source build is pushed successfully, its repository, tag, and digest appear here.":
+    "源码构建成功推送后，仓库、Tag 与 Digest 会显示在这里。",
+  "Copy the full image reference": "复制完整镜像引用",
+  "No matching deployment image": "没有匹配的部署镜像",
+  "No deployment image reference": "暂无部署镜像引用",
+  "This is from the deployment snapshot, including local Registry and external Registry, not equal to the local repository directory.":
+    "数据来自部署快照，包含本地 Registry 与外部 Registry，不等同于本地仓库目录。",
+  "Normal": "正常",
+  "Abnormal": "异常",
+  "The control plane does not give a reason": "控制面未给出原因",
+  "Summarizing control plane status": "正在汇总控制面状态",
+  "Health, Tenants, Deployments, Builds and Registry": "健康、租户、部署、构建与 Registry",
+  "OPERATIONS OVERVIEW": "运营总览",
+  "Platform overview": "平台总览",
+  "Prioritize what needs work from control plane dependencies, tenant quotas, and workload status.":
+    "按控制面依赖、租户配额与工作负载状态确定当前处理重点。",
+  "Platform key metrics": "平台关键指标",
+  "Control plane dependencies": "控制面依赖",
+  "Failed deployments": "失败部署",
+  "1 probe needs attention": "1 个探针需要处理",
+  "{count} probes need attention": "{count} 个探针需要处理",
+  "All probes are normal": "全部探针正常",
+  "Enabled merchants": "已启用商户",
+  "{count} total merchants": "共 {count} 个商户",
+  "{count} disabled": "{count} 个已停用",
+  "All credentials enabled": "凭证均已启用",
+  "{count} dormant · {records} snapshot records": "{count} 个休眠 · {records} 条快照记录",
+  "{count} local repositories": "{count} 个本地仓库",
+  "Need attention": "需要处理",
+  "The control plane has actionable signals": "控制面存在可处理信号",
+  "1 dependency probe failing": "1 个依赖探针失败",
+  "{count} dependency probes failing": "{count} 个依赖探针失败",
+  "See errors and recovery directions below": "请在下方查看错误与恢复方向",
+  "1 failed deployment": "1 个部署失败",
+  "{count} failed deployments": "{count} 个部署失败",
+  "Filter by failed phase and expand run details": "按失败相位筛选并展开运行详情",
+  "Deployment snapshot is stale": "部署快照已过期",
+  "The control plane has not completed its first sync": "控制面尚未完成首次同步",
+  "No sync for {count} seconds": "已有 {count} 秒未同步",
+  "CONTROL PLANE": "控制面",
+  "Dependency health": "依赖健康",
+  "Auto-refreshes every {seconds} seconds": "每 {seconds} 秒自动刷新",
+  "Metadata database": "元数据数据库",
+  "Backend not reported": "未报告后端",
+  "Last reconcile": "上次 reconcile",
+  "Workload registry": "工作负载 Registry",
+  "Kubernetes API": "Kubernetes API",
+  "Version not reported": "未报告版本",
+  "RECENT ACTIVITY": "最近活动",
+  "Recently deployed": "最近部署",
+  "View all": "查看全部",
+  "There are no deployment records on the platform yet.": "平台上还没有部署记录。",
+  "Operator": "Operator",
+  "OBSERVABILITY": "可观测性",
+  "Metrics monitoring": "指标监控",
+  "Inspect resource and traffic trends collected from the Sites cluster. Switch between the cluster overview and individual applications; data is retained for 24 hours.":
+    "查看 Sites 集群采集的资源与流量趋势；可在集群总览和单个应用之间切换，数据保留 24 小时。",
+  "Sampled at {time}": "采样于 {time}",
+  "Waiting for first sample": "等待首个采样",
+  "Monitoring scope and time": "监控范围与时间",
+  "Monitoring scope": "监控范围",
+  "Cluster": "集群",
+  "Single application": "单个应用",
+  "Application": "应用",
+  "Select app": "选择应用",
+  "Time range": "时间范围",
+  "Metrics refresh failed": "指标刷新失败",
+  "{error}. Charts retain the last successful data.": "{error}。图表保留上一次成功数据。",
+  "The metric backend is temporarily unavailable": "指标后端暂不可用",
+  "Prometheus is not ready or accessible, and the console does not replace real samples with imputed values.":
+    "Prometheus 尚未就绪或不可访问；控制台不会用推算值替代真实采样。",
+  "Reading metrics": "正在读取指标",
+  "There are no apps to monitor yet": "暂无可监控应用",
+  "Once you create your application, you can view its resources, requests, error rates, and latency trends.":
+    "创建应用后，即可查看资源、请求、错误率与延迟趋势。",
+  "Current metric": "当前指标",
+  "CPU": "CPU",
+  "Capacity": "容量",
+  "Memory": "内存",
+  "Working set": "工作集",
+  "Request rate": "请求率",
+  "Envoy has completed the request": "Envoy 已完成的请求",
+  "P95 response": "P95 响应",
+  "Error rate": "错误率",
+  "Metric trend": "指标趋势",
+  "No sample yet": "暂无采样",
+  "{label}: current {value}, {count} samples.": "{label}：当前 {value}，共 {count} 个样本。",
+  "{count} samples": "{count} 个样本",
+  "There are no samples yet for the selected time period": "所选时间段暂无采样",
+  "View datasheet": "查看数据表",
+  "Time": "时间",
+  "Value": "数值",
+  "CPU usage": "CPU 用量",
+  "Memory usage": "内存用量",
+  "4xx / 5xx error rate": "4xx / 5xx 错误率",
+  "P95 response time": "P95 响应时间",
+};
+
+const dictionaries: Record<Locale, Record<TranslationKey, string>> = {
+  en,
+  "zh-CN": zhCN,
+};
+
+function isLocale(value: string | null): value is Locale {
+  return LOCALES.includes(value as Locale);
+}
+
+function initialLocale(): Locale {
+  const stored = readStoredLocale();
+  if (isLocale(stored)) return stored;
+  const language = globalThis.navigator?.language ?? "en";
+  return language.toLowerCase().startsWith("zh") ? "zh-CN" : "en";
+}
+
+function readStoredLocale(): string | null {
+  try {
+    return globalThis.localStorage?.getItem(LOCALE_STORAGE_KEY) ?? null;
+  } catch {
+    // Browser storage can be disabled by policy. Locale selection then stays in memory.
+    return null;
+  }
+}
+
+function writeStoredLocale(locale: Locale): void {
+  try {
+    globalThis.localStorage?.setItem(LOCALE_STORAGE_KEY, locale);
+  } catch {
+    // Ignore write failures for the same reason as read failures.
+  }
+}
+
+function interpolate(template: string, values: TranslationValues): string {
+  return template.replace(/\{(\w+)\}/g, (match, name: string) => (
+    Object.hasOwn(values, name) ? String(values[name]) : match
+  ));
+}
+
+interface I18nContextValue {
+  locale: Locale;
+  localeTag: LocaleTag;
+  setLocale: (locale: Locale) => void;
+  t: (key: TranslationKey, values?: TranslationValues) => string;
+}
+
+const I18nContext = createContext<I18nContextValue | null>(null);
+
+export function I18nProvider({ children }: { children: React.ReactNode }) {
+  const [locale, setLocaleState] = useState<Locale>(initialLocale);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+    writeStoredLocale(locale);
+  }, [locale]);
+
+  const setLocale = useCallback((next: Locale) => {
+    if (!isLocale(next)) return;
+    setLocaleState(next);
+  }, []);
+
+  const t = useCallback((key: TranslationKey, values?: TranslationValues) => {
+    const template = dictionaries[locale][key] ?? key;
+    return values ? interpolate(template, values) : template;
+  }, [locale]);
+
+  const value = useMemo<I18nContextValue>(() => ({
+    locale,
+    localeTag: locale === "en" ? "en-US" : "zh-CN",
+    setLocale,
+    t,
+  }), [locale, setLocale, t]);
+
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+}
+
+export function useI18n(): I18nContextValue {
+  const value = useContext(I18nContext);
+  if (!value) throw new Error("useI18n must be used within I18nProvider");
+  return value;
+}
+
+export function LanguageSwitcher({ className }: { className?: string }) {
+  const { locale, setLocale, t } = useI18n();
+  return (
+    <label className={className ? `compact-field ${className}` : "compact-field"}>
+      <span>{t("Language")}</span>
+      <select
+        value={locale}
+        onChange={(event) => setLocale(event.target.value as Locale)}
+      >
+        {LOCALES.map((item) => (
+          <option key={item} value={item}>
+            {item === "en" ? t("English") : t("简体中文")}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}

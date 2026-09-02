@@ -1,0 +1,20 @@
+{
+  "name": "example-stack",
+  "components": [
+    {
+      "name": "web",
+      "image": "nginx:1.29-alpine",
+      "port": 80,
+      "healthPath": "/",
+      "exposure": "public"
+    },
+    {
+      "name": "worker",
+      "image": "busybox:1.37",
+      "port": 8080,
+      "healthPath": "/healthz",
+      "exposure": "internal",
+      "command": ["sh", "-c", "httpd -f -p 8080"]
+    }
+  ]
+}
