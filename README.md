@@ -12,15 +12,9 @@ is ready — makes a real HTTP request to the resulting address and records the 
 and the SHA-256 of the response body in `status.verification`. "Deployed" is a measurement,
 not a claim.
 
-> **Status: alpha.** The reference topology targets local and controlled environments, not
-> a public hosting platform. See [Known limitations](#known-limitations) before adopting it
-> — that section is deliberately specific.
-
-> **Where this fits.** `site` is one of four independently released repositories.
-> [`hullwork/platform-composition`](https://github.com/hullwork/platform-composition) is the
-> only place that describes all four together: what each one is, where the boundaries
-> between them are, and how to install the set on an enterprise cluster. This README does
-> not repeat any of that — it is about `site` alone.
+**Status: alpha.** The reference topology targets local and controlled
+environments, not a public hosting platform — [Known limitations](#known-limitations) is deliberately specific.
+**One of four.** [`hullwork/platform-composition`](https://github.com/hullwork/platform-composition) is where the four repositories are described together.
 
 ```text
  ┌─ an agent asks for a deployment ────────────────────────────────────────┐
