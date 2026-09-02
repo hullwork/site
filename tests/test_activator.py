@@ -601,21 +601,46 @@ class ForwardingTests(unittest.TestCase):
         self.assertNotIn("text/html", headers.get("Content-Type", ""))
 
     class _ApiserverDown:
-        """Every Kubernetes call fails; only the real Waker's error handling is under test."""
+        """Every Kubernetes call fails; only the real Waker's error handling is under test.
+
+        The failure type is a parameter because it used to be `RuntimeError`
+        alone -- the one type the Waker's guard already caught -- so this
+        fixture agreed with the guard by construction and the P0 below could
+        not tell a working guard from a broken one. KubeClient normalises to
+        RuntimeError now (see test_kube_error_normalisation), and this keeps
+        the Waker honest if that ever slips.
+        """
+
+        def __init__(self, error=None):
+            self._error = error or RuntimeError("apiserver unreachable")
 
         def get(self, path):
-            raise RuntimeError("apiserver unreachable")
+            raise self._error
 
         def patch(self, path, body):
-            raise RuntimeError("apiserver unreachable")
+            raise self._error
 
     def test_apiserver_outage_still_forwards_to_an_awake_site(self) -> None:
         """🔴 P0: with the apiserver down, a request to a running STZ site must get the
         site's response, not a dropped connection (RemoteDisconnected)."""
-        activator.Handler.waker = activator.Waker(self._ApiserverDown())
-        status, _, body = self.request(path="/still-up")
-        self.assertEqual(status, 200)
-        self.assertEqual(body, b"upstream-ok:")
+        import http.client as _http
+        import ssl as _ssl
+
+        for name, error in (
+            ("runtime", RuntimeError("apiserver unreachable")),
+            ("api", activator.ApiError(503, "unavailable")),
+            ("reset", ConnectionResetError("reset by peer")),
+            ("short read", _http.IncompleteRead(b"ab", 100)),
+            ("tls", _ssl.SSLError("record layer failure")),
+            ("non-json", ValueError("Expecting value: line 1 column 1")),
+        ):
+            with self.subTest(failure=name):
+                activator.Handler.waker = activator.Waker(
+                    self._ApiserverDown(error)
+                )
+                status, _, body = self.request(path="/still-up")
+                self.assertEqual(status, 200)
+                self.assertEqual(body, b"upstream-ok:")
 
     def test_apiserver_outage_with_a_dormant_site_is_502_not_an_empty_reply(self) -> None:
         """Both down: the answer is a real 502 (the existing forward-failure path), which

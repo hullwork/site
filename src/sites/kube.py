@@ -6,6 +6,7 @@ reconnection behavior bounded.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import ssl
@@ -111,10 +112,26 @@ class KubeClient:
             raise RuntimeError(
                 f"Kubernetes API timed out after {self.timeout}s"
             ) from exc
+        except (OSError, http.client.HTTPException) as exc:
+            # Everything else that a body read can fail with. urlopen wraps what
+            # it raises itself, but a connection reset, an SSL error or a short
+            # read during read() arrives bare -- and none of those is a
+            # RuntimeError, so every caller guarding on (ApiError, RuntimeError)
+            # let them through. The comment above already knew this shape for
+            # TimeoutError and handled that one case; these are the rest.
+            # IncompleteRead is deliberately in the tuple: it is an
+            # HTTPException, not an OSError.
+            raise RuntimeError(f"Kubernetes API read failed: {exc}") from exc
 
         if not raw:
             return None
-        return json.loads(raw.decode("utf-8"))
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except ValueError as exc:
+            # A proxy or an ingress in front of the apiserver answering with an
+            # HTML error page is not JSON. This parse used to sit outside the
+            # try, so the decode error escaped as a ValueError.
+            raise RuntimeError(f"Kubernetes API returned non-JSON: {exc}") from exc
 
     def get(self, path: str) -> dict[str, Any]:
         result = self.request("GET", path)

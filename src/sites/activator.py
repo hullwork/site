@@ -406,7 +406,14 @@ class Waker:
         """
         try:
             return self._available(route) > 0
-        except (ApiError, RuntimeError) as exc:
+        except Exception as exc:
+            # Deliberately every exception, not the (ApiError, RuntimeError) it
+            # used to be. KubeClient normalises to those two, but a promise of
+            # "must not raise" that depends on a caller keeping its side of a
+            # contract is not a promise -- and the cost of one escaping is a
+            # dropped connection on a site that is up and serving. Unknown is
+            # already a first-class answer here, so widening the catch changes
+            # nothing else: the caller decides whether to forward anyway.
             AVAILABILITY_CHECK_FAILED.inc()
             telemetry.log_exception(
                 "activator_available_check_failed", exc, host=route.host
