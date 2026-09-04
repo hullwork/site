@@ -50,7 +50,7 @@ OSS_AUTH_MOUNT = getenv("SITES_OSS_AUTH_MOUNT", "/var/run/sites-oss") or "/var/r
 OSS_AUTH_SECRET = getenv("SITES_OSS_AUTH_SECRET", "sites-oss-auth") or "sites-oss-auth"
 OSS_DOWNLOADER_IMAGE = getenv(
     "SITES_OSS_DOWNLOADER_IMAGE",
-    "registry.convee.local:5000/sites-control:local",
+    "ghcr.io/hullwork/site-control:v0.1.0",
 )
 BUILDKIT_IMAGE = getenv(
     "SITES_BUILDKIT_IMAGE",

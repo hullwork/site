@@ -36,7 +36,7 @@ class BenchmarkContractTests(unittest.TestCase):
             def read(self): return b"{}"
 
         driver = ActualClusterDriver(ClusterConfig(
-            context="isolated-kind", namespace="sites-benchmark-test", trials=60,
+            context="isolated-kubeadm", namespace="sites-benchmark-test", trials=60,
             control_image="registry.example/control@sha256:" + "a" * 64,
             dynamic_image="registry.example/fixture@sha256:" + "b" * 64,
         ))
@@ -58,7 +58,7 @@ class BenchmarkContractTests(unittest.TestCase):
             def read(self): return b"{}"
 
         driver = ActualClusterDriver(ClusterConfig(
-            context="isolated-kind", namespace="sites-benchmark-test", trials=60,
+            context="isolated-kubeadm", namespace="sites-benchmark-test", trials=60,
             control_image="registry.example/control@sha256:" + "a" * 64,
             dynamic_image="registry.example/fixture@sha256:" + "b" * 64,
         ))
@@ -79,7 +79,7 @@ class BenchmarkContractTests(unittest.TestCase):
         from cluster_benchmark import ActualClusterDriver, ClusterConfig
 
         driver = ActualClusterDriver(ClusterConfig(
-            context="isolated-kind", namespace="sites-benchmark-test", trials=60,
+            context="isolated-kubeadm", namespace="sites-benchmark-test", trials=60,
             control_image="registry.example/control@sha256:" + "a" * 64,
             dynamic_image="registry.example/fixture@sha256:" + "b" * 64,
         ))
@@ -123,7 +123,7 @@ class BenchmarkContractTests(unittest.TestCase):
         from cluster_benchmark import ActualClusterDriver, ClusterConfig
 
         driver = ActualClusterDriver(ClusterConfig(
-            context="isolated-kind", namespace="sites-benchmark-test", trials=60,
+            context="isolated-kubeadm", namespace="sites-benchmark-test", trials=60,
             control_image="registry.example/control@sha256:" + "a" * 64,
             dynamic_image="registry.example/fixture@sha256:" + "b" * 64,
         ))
@@ -166,7 +166,7 @@ class BenchmarkContractTests(unittest.TestCase):
         from cluster_benchmark import ActualClusterDriver, ClusterConfig
 
         return ActualClusterDriver(ClusterConfig(
-            context="isolated-kind", namespace="sites-benchmark-test", trials=60,
+            context="isolated-kubeadm", namespace="sites-benchmark-test", trials=60,
             control_image="registry.example/control@sha256:" + "a" * 64,
             dynamic_image="registry.example/fixture@sha256:" + "b" * 64,
         ))
@@ -176,7 +176,7 @@ class BenchmarkContractTests(unittest.TestCase):
             calls.append(argv)
             stdout = ""
             if argv == ["kubectl", "config", "current-context"]:
-                stdout = "isolated-kind\n"
+                stdout = "isolated-kubeadm\n"
             elif argv[:3] == ["kubectl", "get", "namespace"] and namespace_exists:
                 stdout = "namespace/sites-benchmark-test\n"
             return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
@@ -330,7 +330,7 @@ class BenchmarkContractTests(unittest.TestCase):
         digest_b = "sha256:" + "b" * 64
         completed = subprocess.run([
             sys.executable, str(RUNNER), "--profile", "cluster", "--dry-run",
-            "--context", "isolated-kind", "--namespace", "sites-benchmark-test",
+            "--context", "isolated-kubeadm", "--namespace", "sites-benchmark-test",
             "--trials", "60", "--control-image", f"registry.example/control@{digest_a}",
             "--dynamic-image", f"registry.example/fixture@{digest_b}",
         ], cwd=ROOT, check=False, capture_output=True, text=True)
@@ -358,7 +358,7 @@ class BenchmarkContractTests(unittest.TestCase):
             def finish(self): return {"namespaceDeleted": True}
 
         result = run(ClusterConfig(
-            context="isolated-kind", namespace="sites-benchmark-test", trials=60,
+            context="isolated-kubeadm", namespace="sites-benchmark-test", trials=60,
             control_image="registry.example/control@sha256:" + "a" * 64,
             dynamic_image="registry.example/fixture@sha256:" + "b" * 64,
         ), FakeDriver())
@@ -382,7 +382,7 @@ class BenchmarkContractTests(unittest.TestCase):
             def finish(self): return {"namespaceDeleted": True}
 
         result = run(ClusterConfig(
-            context="isolated-kind", namespace="sites-benchmark-test", trials=60,
+            context="isolated-kubeadm", namespace="sites-benchmark-test", trials=60,
             control_image="registry.example/control@sha256:" + "a" * 64,
             dynamic_image="registry.example/fixture@sha256:" + "b" * 64,
         ), FailingDriver())

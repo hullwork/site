@@ -10,3 +10,4 @@ build/
 console/node_modules/
 console/dist/
 supabase/.temp/
+.site-kubeadm/

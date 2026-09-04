@@ -317,6 +317,9 @@ export default function MerchantsView({
                   const rowBusy = busy === merchant.merchantId;
                   const isEditing = editing === merchant.merchantId;
                   const disabled = Boolean(merchant.disabledAt);
+                  const keyExpiry = merchant.keyExpiresAt ? Date.parse(merchant.keyExpiresAt) : Number.NaN;
+                  const keyExpired = Number.isFinite(keyExpiry) && keyExpiry <= Date.now();
+                  const keyExpiring = Number.isFinite(keyExpiry) && !keyExpired && keyExpiry <= Date.now() + 7 * 24 * 60 * 60 * 1000;
                   return (
                     <tr key={merchant.merchantId} className={disabled ? "row-disabled" : undefined}>
                       <td className="mono" data-label={t("Merchant ID")}>{merchant.merchantId}</td>
@@ -396,6 +399,16 @@ export default function MerchantsView({
                         <span className={`badge ${disabled ? "badge-bad" : "badge-ok"}`}>
                           {disabled ? t("Disabled") : t("Enabled")}
                         </span>
+                        <span className={`credential-state ${keyExpired ? "credential-bad" : keyExpiring ? "credential-warn" : ""}`}>
+                          {merchant.keyExpiresAt
+                            ? keyExpired
+                              ? t("API key expired")
+                              : keyExpiring
+                                ? t("API key expires soon: {date}", { date: new Date(keyExpiry).toLocaleDateString(localeTag) })
+                                : t("API key expires {date}", { date: new Date(keyExpiry).toLocaleDateString(localeTag) })
+                            : t("API key expiry not reported")}
+                        </span>
+                        {merchant.mayActAsSubjects ? <span className="credential-state credential-warn">{t("May act as tenant subjects")}</span> : null}
                       </td>
                       <td className="cell-actions" data-label={t("Operation")}>
                         {isEditing ? (

@@ -586,14 +586,48 @@ _register_schema_step(
     _apply_v6_merchant_key_policy,
 )
 
+
+def _apply_v7_deployment_evidence(store: "Store", cursor: Any) -> None:
+    """Persist operator verification in the bounded administrative snapshot.
+
+    The tenant detail route reads the live CR and has always returned this
+    evidence. The admin console deliberately reads PostgreSQL instead of
+    fanning out to Kubernetes, so without durable columns it could only show
+    "no evidence" for a deployment that the operator had actually verified.
+    Existing rows remain NULL until the next snapshot sweep; the synchronizer
+    then fills both values from the authoritative CR status.
+    """
+    columns = store._table_columns(cursor, _CANONICAL_DEPLOYMENTS_TABLE)
+    if "verification" not in columns:
+        cursor.execute(
+            store._sql(
+                "ALTER TABLE sites_deployments ADD COLUMN verification "
+                "{json_type}"
+            )
+        )
+    if "artifact_sha256" not in columns:
+        cursor.execute(
+            store._sql(
+                "ALTER TABLE sites_deployments ADD COLUMN artifact_sha256 "
+                "{id_type}"
+            )
+        )
+
+
+_register_schema_step(
+    7,
+    "persist control-plane verification evidence in deployment snapshots",
+    _apply_v7_deployment_evidence,
+)
+
 _UPSERT_TEMPLATE = """
 INSERT INTO sites_deployments (
     merchant_id, user_id, service_name, cr_name, image, port, health_path,
-    revision, exposure, scale_to_zero, observed_replicas, spec, phase,
-    message, url
+    revision, exposure, scale_to_zero, observed_replicas, verification,
+    artifact_sha256, spec, phase, message, url
 ) VALUES (
     {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph},
-    {ph}{json_cast}, {ph}, {ph}, {ph}
+    {ph}{json_cast}, {ph}, {ph}{json_cast}, {ph}, {ph}, {ph}
 )
 ON CONFLICT (merchant_id, user_id, service_name) DO UPDATE SET
     cr_name = EXCLUDED.cr_name,
@@ -604,6 +638,8 @@ ON CONFLICT (merchant_id, user_id, service_name) DO UPDATE SET
     exposure = EXCLUDED.exposure,
     scale_to_zero = EXCLUDED.scale_to_zero,
     observed_replicas = EXCLUDED.observed_replicas,
+    verification = EXCLUDED.verification,
+    artifact_sha256 = EXCLUDED.artifact_sha256,
     spec = EXCLUDED.spec,
     phase = EXCLUDED.phase,
     message = EXCLUDED.message,
@@ -649,15 +685,17 @@ _POSTGRES = _Dialect(
 # immutable ``siteVersion`` binding saved from the CR.
 _DEPLOYMENT_READ_COLUMNS = """
     merchant_id, user_id, service_name, cr_name, image, port, health_path,
-    revision, exposure, scale_to_zero, observed_replicas, phase, message,
-    url, created_at, updated_at, deletion_requested_at, deleted_at
+    revision, exposure, scale_to_zero, observed_replicas, verification,
+    artifact_sha256, phase, message, url, created_at, updated_at,
+    deletion_requested_at, deleted_at
 """
 
 _SELECT_TEMPLATE = f"""
 SELECT
     merchant_id, user_id, service_name, cr_name, image, port, health_path,
-    revision, exposure, scale_to_zero, observed_replicas, spec, phase, message,
-    url, created_at, updated_at, deletion_requested_at, deleted_at
+    revision, exposure, scale_to_zero, observed_replicas, verification,
+    artifact_sha256, spec, phase, message, url, created_at, updated_at,
+    deletion_requested_at, deleted_at
 FROM sites_deployments
 WHERE merchant_id = {{ph}} AND user_id = {{ph}} AND service_name = {{ph}}
 """
@@ -708,6 +746,8 @@ _RECORD_COLUMNS = (
     "exposure",
     "scale_to_zero",
     "observed_replicas",
+    "verification",
+    "artifact_sha256",
     "phase",
     "message",
     "url",
@@ -718,9 +758,9 @@ _RECORD_COLUMNS = (
 )
 
 _SELECT_RECORD_COLUMNS = (
-    *_RECORD_COLUMNS[:11],
+    *_RECORD_COLUMNS[:13],
     "spec",
-    *_RECORD_COLUMNS[11:],
+    *_RECORD_COLUMNS[13:],
 )
 
 
@@ -758,6 +798,16 @@ def site_deployment_values(
             if observed_replicas is not None
             else None
         ),
+        (
+            json.dumps(
+                status.get("verification"),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            if status.get("verification") is not None
+            else None
+        ),
+        status.get("artifactSha256"),
         json.dumps(spec, ensure_ascii=False, separators=(",", ":")),
         resolved_phase,
         message if message is not None else str(status.get("message", "")),

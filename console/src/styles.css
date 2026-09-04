@@ -1,15 +1,6 @@
 /*
- * Design tokens match web/src/styles.css value for value: that file is Work UI's actual
- * appearance and this project's design-system source of truth. It is shared with
- * sandbox/console/src/styles.css. Cross-directory imports are deliberately avoided:
- * console output is built separately by the node stage, and importing ../../web would
- * pull the whole repository into that build context. When Work UI colors change, update
- * the handful of :root variables in each copy.
- *
- * One intentional difference from Work UI: that UI only recognizes
- * [data-theme="dark"], while this console also follows prefers-color-scheme. The admin
- * console has no account system or theme setting, so following the OS is the only way to
- * avoid glare on dark desktops.
+ * Standalone console design tokens. The console follows prefers-color-scheme because it
+ * has no account-level theme setting.
  */
 
 :root {
@@ -494,6 +485,28 @@ tbody tr:last-child td {
   border-color: var(--danger);
 }
 
+.badge-neutral {
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.credential-state {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.credential-warn {
+  color: var(--warning);
+}
+
+.credential-bad {
+  color: var(--danger);
+}
+
 /* Phase colors match .deploy-phase in web/src/styles.css. */
 .phase {
   display: inline-flex;
@@ -645,6 +658,18 @@ tbody tr:last-child td {
   display: flex;
   align-items: flex-start;
   gap: 12px;
+}
+
+.deploy-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.deployment-form .deployment-image-field {
+  flex-basis: 360px;
 }
 
 .deploy-resource-icon {
@@ -949,7 +974,7 @@ tbody tr:last-child td {
  * asset cards and the responsive data table.
  *
  * This file used to be two eras stacked on top of each other -- a base layer
- * inherited from the sandbox console, then a 2026 layer that re-declared the same
+ * inherited from an earlier console, then a 2026 layer that re-declared the same
  * selectors further down to override it. That shape hid three real defects: a
  * second :root silently replaced the design tokens, `.button` clobbered the
  * border of `.button-primary` and `.button-danger`, and a stale 720px breakpoint

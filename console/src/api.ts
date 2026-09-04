@@ -18,6 +18,7 @@ import { mockApi } from "./mock";
 import type {
   AdminBuildListResponse,
   AdminDeploymentListResponse,
+  AdminDeploymentView,
   AdminHealthResponse,
   AdminImageListResponse,
   MerchantKeyResponse,
@@ -142,6 +143,18 @@ export interface DeploymentQuery {
   limit?: number;
 }
 
+export interface AdminDeploymentInput {
+  merchantId: string;
+  userId: string;
+  name: string;
+  image: string;
+  port: number;
+  healthPath: string;
+  livenessPath?: string;
+  exposure: "public" | "internal";
+  memoryLimit?: string;
+}
+
 export interface SitesAdminApi {
   /** Which login paths this control plane has enabled. Unauthenticated on purpose. */
   authMethods(): Promise<AuthMethods>;
@@ -173,6 +186,8 @@ export interface SitesAdminApi {
   ): Promise<TenantTokenResponse>;
   disableTenant(merchantId: string, userId: string): Promise<void>;
   listDeployments(query: DeploymentQuery): Promise<AdminDeploymentListResponse>;
+  createDeployment(input: AdminDeploymentInput): Promise<AdminDeploymentView>;
+  deleteDeployment(merchantId: string, userId: string, serviceName: string): Promise<void>;
   listBuilds(merchantId?: string): Promise<AdminBuildListResponse>;
   listImages(): Promise<AdminImageListResponse>;
   getClusterMetrics(range: MetricsRange): Promise<MonitoringResponse>;
@@ -201,7 +216,7 @@ const liveApi: SitesAdminApi = {
       return await request<AdminHealthResponse>("/v1/admin/health");
     } catch (error) {
       // The body of 503 contains "Which item is unreachable and why", which is the only information when the control plane fails.
-      // The first scene cannot be swallowed as an ordinary error (same as getHealth of sandbox/console).
+      // The first scene cannot be swallowed as an ordinary error.
       if (
         error instanceof SitesApiError
         && error.body
@@ -287,6 +302,20 @@ const liveApi: SitesAdminApi = {
         limit: query.limit,
       }),
     );
+  },
+
+  createDeployment(input) {
+    return request<AdminDeploymentView>("/v1/admin/deployments", {
+      method: "POST",
+      ...jsonBody(input),
+    });
+  },
+
+  async deleteDeployment(merchantId, userId, serviceName) {
+    await request(withQuery(
+      `/v1/admin/deployments/${encodeURIComponent(serviceName)}`,
+      { merchantId, userId },
+    ), { method: "DELETE" });
   },
 
   listBuilds(merchantId) {

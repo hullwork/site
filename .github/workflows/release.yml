@@ -134,7 +134,6 @@ jobs:
             --rendered release/site-rendered.yaml \
             --image-json release/image-control.json
           helm package "$RUNNER_TEMP/site-chart" --destination release
-          cp "$RUNNER_TEMP/site-chart/package.yaml" release/site-package.yaml
       - name: Publish immutable OCI chart and metadata
         env: {RELEASE_TAG: '${{ github.ref_name }}'}
         run: |
@@ -145,7 +144,6 @@ jobs:
           test -n "$chart_digest"
           chart_file="$(printf '%s\n' release/site-*.tgz)"
           chart_checksum="sha256:$(sha256sum "$chart_file" | awk '{print $1}')"
-          descriptor_checksum="sha256:$(sha256sum release/site-package.yaml | awk '{print $1}')"
           values_file="site-values-${RELEASE_TAG#v}.yaml"
           values_checksum="sha256:$(sha256sum "release/$values_file" | awk '{print $1}')"
           jq -n \
@@ -155,11 +153,10 @@ jobs:
             --arg digest "$chart_digest" \
             --arg chartFile "${chart_file#release/}" \
             --arg chartChecksum "$chart_checksum" \
-            --arg descriptorChecksum "$descriptor_checksum" \
             --arg valuesFile "$values_file" \
             --arg valuesChecksum "$values_checksum" \
             --slurpfile controlImage release/image-control.json \
-            '{schemaVersion:1,name:$name,version:$version,package:{type:"helm-oci",url:$url,digest:$digest,immutableRef:($url+"@"+$digest)},artifacts:{chart:{filename:$chartFile,sha256:$chartChecksum},packageDescriptor:{filename:"site-package.yaml",sha256:$descriptorChecksum},digestPinnedValues:{filename:$valuesFile,sha256:$valuesChecksum}},runtimeImages:{publishedByThisWorkflow:true,images:$controlImage}}' \
+            '{schemaVersion:1,name:$name,version:$version,package:{type:"helm-oci",url:$url,digest:$digest,immutableRef:($url+"@"+$digest)},artifacts:{chart:{filename:$chartFile,sha256:$chartChecksum},digestPinnedValues:{filename:$valuesFile,sha256:$valuesChecksum}},runtimeImages:{publishedByThisWorkflow:true,images:$controlImage}}' \
             >release/package-metadata.json
           (cd release && sha256sum -- *.{json,tgz,yaml} >SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

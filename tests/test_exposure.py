@@ -541,7 +541,7 @@ class ExposureConfigMapTest(unittest.TestCase):
     def test_gateway_uses_a_distinct_workload_registry_name(self) -> None:
         self.assertEqual(
             self.config_map()["data"]["SITES_REGISTRY_PULL_HOST"],
-            "site-registry.convee.local:5000",
+            "localhost:5000",
         )
 
 

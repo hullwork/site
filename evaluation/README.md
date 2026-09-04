@@ -19,7 +19,7 @@ Kubernetes:
 
 ```bash
 uv run --locked --extra dev python scripts/run-benchmark.py --profile cluster --dry-run \
-  --context isolated-kind --namespace sites-benchmark-001 --trials 60 \
+  --context isolated-kubeadm --namespace sites-benchmark-001 --trials 60 \
   --control-image registry.example/sites-control@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   --dynamic-image registry.example/http-fixture@sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 ```

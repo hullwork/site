@@ -9,4 +9,4 @@ sources:
   - https://github.com/hullwork/site
 annotations:
   artifacthub.io/license: MIT
-  site.convee.io/package-capabilities: sites-control-plane,sites-operator
+  site.hullwork.io/package-capabilities: sites-control-plane,sites-operator

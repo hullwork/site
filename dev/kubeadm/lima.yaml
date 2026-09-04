@@ -1,0 +1,81 @@
+images:
+  - location: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+    arch: x86_64
+  - location: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img
+    arch: aarch64
+
+cpus: 6
+memory: 8GiB
+disk: 40GiB
+
+# The host talks to the API only through this repository-owned forward. The VM
+# uses Lima's default network, so it does not require a pre-created network or
+# configuration from another project.
+portForwards:
+  - guestPort: 6443
+    hostPort: 18447
+    static: true
+  # NodePort exposure is the quickstart's public application path. Keep this
+  # mapping aligned with src/sites/exposure.py: 30080, 30082-30088 become
+  # 18090, 18092-18098. 30081 is deliberately excluded and 18091 serves the
+  # admin console through kubectl port-forward instead.
+  - guestPort: 30080
+    hostPort: 18090
+    static: true
+  - guestPort: 30082
+    hostPort: 18092
+    static: true
+  - guestPort: 30083
+    hostPort: 18093
+    static: true
+  - guestPort: 30084
+    hostPort: 18094
+    static: true
+  - guestPort: 30085
+    hostPort: 18095
+    static: true
+  - guestPort: 30086
+    hostPort: 18096
+    static: true
+  - guestPort: 30087
+    hostPort: 18097
+    static: true
+  - guestPort: 30088
+    hostPort: 18098
+    static: true
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/sh
+      set -eux
+      swapoff -a
+      modprobe overlay
+      modprobe br_netfilter
+      cat >/etc/modules-load.d/site-kubernetes.conf <<'EOF'
+      overlay
+      br_netfilter
+      EOF
+      cat >/etc/sysctl.d/99-site-kubernetes.conf <<'EOF'
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+      EOF
+      sysctl --system >/dev/null
+
+      apt-get update -qq
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        apt-transport-https ca-certificates containerd curl gpg
+      install -d -m 0755 /etc/apt/keyrings /etc/containerd
+      containerd config default >/etc/containerd/config.toml
+      sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+      systemctl restart containerd
+
+      curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.36/deb/Release.key \
+        | gpg --dearmor --yes -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.36/deb/ /' \
+        >/etc/apt/sources.list.d/kubernetes.list
+      apt-get update -qq
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        kubelet=1.36.* kubeadm=1.36.* kubectl=1.36.*
+      apt-mark hold kubelet kubeadm kubectl

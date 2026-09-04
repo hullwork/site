@@ -21,6 +21,9 @@ Standard inputs:
   SITES_NAMESPACE                Control namespace (default: sites-local).
   SITES_HELM_RELEASE             Helm release (default: site).
   SITES_HELM_VALUES              Values file (default: values-dev.yaml).
+  SITES_CLUSTER_POD_CIDR         Actual cluster Pod CIDR; overrides the values file.
+  SITES_LOCAL_PATH_PROVISIONER_ENABLED
+                                 true/false; set false when the cluster already has one.
   SITES_CONTROL_IMAGE_REPOSITORY Optional pre-published control image repository.
   SITES_CONTROL_IMAGE_TAG        Optional control image tag.
   SITES_CONTROL_IMAGE_DIGEST     Optional immutable sha256 digest.
@@ -55,6 +58,21 @@ image_args=()
 if [[ -n "${SITES_CONTROL_IMAGE_REPOSITORY:-}" ]]; then
   image_args+=(--set "images.control.repository=$SITES_CONTROL_IMAGE_REPOSITORY")
 fi
+
+cluster_args=()
+if [[ -n "${SITES_CLUSTER_POD_CIDR:-}" ]]; then
+  cluster_args+=(--set-string "clusterNetwork.podCIDR=$SITES_CLUSTER_POD_CIDR")
+fi
+if [[ -n "${SITES_LOCAL_PATH_PROVISIONER_ENABLED:-}" ]]; then
+  case "$SITES_LOCAL_PATH_PROVISIONER_ENABLED" in
+    true|false) ;;
+    *)
+      printf 'SITES_LOCAL_PATH_PROVISIONER_ENABLED must be true or false\n' >&2
+      exit 2
+      ;;
+  esac
+  cluster_args+=(--set "localPathProvisioner.enabled=$SITES_LOCAL_PATH_PROVISIONER_ENABLED")
+fi
 if [[ -n "${SITES_CONTROL_IMAGE_TAG:-}" ]]; then
   image_args+=(--set "images.control.tag=$SITES_CONTROL_IMAGE_TAG")
 fi
@@ -75,6 +93,7 @@ up() {
     --values "$values_file" \
     --set "namespaces.control=$namespace" \
     --set "namespaces.gateway=$namespace" \
+    ${cluster_args[@]+"${cluster_args[@]}"} \
     ${image_args[@]+"${image_args[@]}"}
   verify
 }

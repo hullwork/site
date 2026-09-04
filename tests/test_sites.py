@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import io
 import ipaddress
+import json
 import os
 import re
 import signal
@@ -433,6 +434,12 @@ class CommonTests(unittest.TestCase):
                 "phase": "Running",
                 "message": "Deployment is available",
                 "url": "http://127.0.0.1:18090",
+                "verification": {
+                    "ok": True,
+                    "httpStatus": 200,
+                    "bodySha256": "a" * 64,
+                },
+                "artifact_sha256": "b" * 64,
                 "created_at": updated_at,
                 "updated_at": updated_at,
                 "deletion_requested_at": None,
@@ -446,6 +453,8 @@ class CommonTests(unittest.TestCase):
         self.assertTrue(response["scaleToZero"])
         self.assertEqual(response["observedReplicas"], 0)
         self.assertEqual(response["runtimeState"], "Dormant")
+        self.assertEqual(response["verification"]["httpStatus"], 200)
+        self.assertEqual(response["artifactSha256"], "b" * 64)
 
     def test_rejects_invalid_image_and_user(self) -> None:
         with self.assertRaises(ValidationError):
@@ -573,10 +582,10 @@ class CommonTests(unittest.TestCase):
             self.assertEqual(container["image"], image)
             return container["imagePullPolicy"]
 
-        self.assertEqual(policy_for("registry.convee.local:5000/demo:sites-local"), "Always")
+        self.assertEqual(policy_for("registry.example/demo:sites-local"), "Always")
         self.assertEqual(
             policy_for(
-                "registry.convee.local:5000/demo@sha256:"
+                "registry.example/demo@sha256:"
                 + "0" * 64
             ),
             "IfNotPresent",
@@ -3470,6 +3479,8 @@ class StorageTests(unittest.TestCase):
             "phase": "Running",
             "message": "Deployment is available",
             "url": "http://127.0.0.1:18090",
+            "verification": {"ok": True, "httpStatus": 200},
+            "artifactSha256": "a" * 64,
         }
         self.resource["spec"]["scaleToZero"] = True
         self.resource["status"]["observedReplicas"] = 0
@@ -3486,13 +3497,15 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(values[8], "public")
         self.assertTrue(values[9])
         self.assertEqual(values[10], 0)
-        self.assertEqual(values[12], "Running")
-        self.assertEqual(values[14], "http://127.0.0.1:18090")
+        self.assertEqual(json.loads(values[11]), {"ok": True, "httpStatus": 200})
+        self.assertEqual(values[12], "a" * 64)
+        self.assertEqual(values[14], "Running")
+        self.assertEqual(values[16], "http://127.0.0.1:18090")
 
     def test_deletion_timestamp_forces_deleting_phase(self) -> None:
         self.resource["metadata"]["deletionTimestamp"] = "2026-08-08T00:00:00Z"
         values = site_deployment_values(self.resource)
-        self.assertEqual(values[12], "Deleting")
+        self.assertEqual(values[14], "Deleting")
 
     def test_list_deployments_is_bounded_and_returns_records(self) -> None:
         row = (
@@ -3507,6 +3520,8 @@ class StorageTests(unittest.TestCase):
             "internal",
             False,
             1,
+            {"ok": True, "httpStatus": 200},
+            "a" * 64,
             "Running",
             "Deployment is available",
             "http://127.0.0.1:18090",
@@ -3563,6 +3578,8 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(records[0]["service_name"], "web")
         self.assertEqual(records[0]["revision"], "revision-9")
         self.assertEqual(records[0]["exposure"], "internal")
+        self.assertEqual(records[0]["verification"]["httpStatus"], 200)
+        self.assertEqual(records[0]["artifact_sha256"], "a" * 64)
 
     def test_database_tls_never_silently_falls_back_to_plaintext(self) -> None:
         """libpq's negotiating modes are refused, not merely non-default.
@@ -4102,6 +4119,50 @@ class AdminAggregationGuardTests(unittest.TestCase):
         handler.do_GET()
         self.assertEqual(self.responses[-1][0], 400)
         self.assertEqual(handler.store.all_calls, [])
+
+    def test_admin_can_submit_for_one_explicit_tenant(self) -> None:
+        handler = self._handler(self.SERVICE_TOKEN)
+        handler.path = "/v1/admin/deployments"
+        body = {
+            "merchantId": "acme",
+            "userId": "alice",
+            "name": "shop",
+            "image": "example.invalid/shop@sha256:" + "a" * 64,
+        }
+        handler._read_body = lambda: dict(body)
+        calls: list[tuple[str, str, dict]] = []
+        handler._post_deployment_for = lambda merchant, user, payload: calls.append(
+            (merchant, user, payload)
+        )
+        handler.do_POST()
+        self.assertEqual(
+            calls,
+            [("acme", "alice", {"name": "shop", "image": body["image"]})],
+        )
+
+    def test_tenant_cannot_reach_admin_submit_body(self) -> None:
+        handler = self._handler("site_alice")
+        handler.path = "/v1/admin/deployments"
+        handler._read_body = lambda: self.fail("body read before admin authorization")
+        handler.do_POST()
+        self.assertEqual(self.responses[-1][0], 403)
+
+    def test_admin_delete_keeps_the_full_three_part_identity(self) -> None:
+        handler = self._handler(self.SERVICE_TOKEN)
+        handler.path = "/v1/admin/deployments/shop?merchantId=acme&userId=alice"
+        calls: list[tuple[str, str, str]] = []
+        handler._delete_deployment_for = lambda service, merchant, user: calls.append(
+            (service, merchant, user)
+        )
+        handler.do_DELETE()
+        self.assertEqual(calls, [("shop", "acme", "alice")])
+
+    def test_admin_delete_requires_tenant_identity(self) -> None:
+        handler = self._handler(self.SERVICE_TOKEN)
+        handler.path = "/v1/admin/deployments/shop?merchantId=acme"
+        handler._delete_deployment_for = lambda *_: self.fail("missing user accepted")
+        handler.do_DELETE()
+        self.assertEqual(self.responses[-1][0], 400)
 
 
 class AdminHealthTests(unittest.TestCase):

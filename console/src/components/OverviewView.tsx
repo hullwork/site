@@ -134,6 +134,11 @@ export default function OverviewView({
   const unhealthyCount = probes.filter((probe) => probe && !probe.reachable).length;
   const snapshotStale = snapshotAge !== undefined
     && (snapshotAge === null || snapshotAge > SNAPSHOT_STALE_SECONDS);
+  const credentialRiskCount = merchants.filter((merchant) => {
+    if (!merchant.keyExpiresAt || merchant.disabledAt) return false;
+    const expires = Date.parse(merchant.keyExpiresAt);
+    return Number.isFinite(expires) && expires <= Date.now() + 7 * 24 * 60 * 60 * 1000;
+  }).length;
 
   if (loading) {
     return <div className="state page-loading" aria-live="polite"><LoaderCircle className="spin" size={22} /><strong>{t("Summarizing control plane status")}</strong><span>{t("Health, Tenants, Deployments, Builds and Registry")}</span></div>;
@@ -158,7 +163,7 @@ export default function OverviewView({
         <MetricCard label={t("Active builds")} value={summary.activeBuilds} hint={t("{count} local repositories", { count: repositories.length })} icon={<Hammer size={19} />} tone={summary.activeBuilds ? "warn" : "neutral"} onClick={() => onNavigate("builds")} />
       </section>
 
-      {(unhealthyCount > 0 || summary.failed > 0 || snapshotStale) ? (
+      {(unhealthyCount > 0 || summary.failed > 0 || snapshotStale || credentialRiskCount > 0) ? (
         <section className="attention-card" aria-labelledby="attention-title">
           <div>
             <span className="section-kicker">{t("Need attention")}</span>
@@ -168,6 +173,7 @@ export default function OverviewView({
             {unhealthyCount > 0 ? <button type="button" onClick={() => onNavigate("overview")}><CircleAlert size={17} /><span><strong>{unhealthyCount === 1 ? t("1 dependency probe failing") : t("{count} dependency probes failing", { count: unhealthyCount })}</strong><small>{t("See errors and recovery directions below")}</small></span></button> : null}
             {summary.failed > 0 ? <button type="button" onClick={() => onNavigate("deployments")}><Boxes size={17} /><span><strong>{summary.failed === 1 ? t("1 failed deployment") : t("{count} failed deployments", { count: summary.failed })}</strong><small>{t("Filter by failed phase and expand run details")}</small></span></button> : null}
             {snapshotStale ? <button type="button" onClick={() => onNavigate("deployments")}><Database size={17} /><span><strong>{t("Deployment snapshot is stale")}</strong><small>{snapshotAge === null ? t("The control plane has not completed its first sync") : t("No sync for {count} seconds", { count: Math.round(snapshotAge) })}</small></span></button> : null}
+            {credentialRiskCount > 0 ? <button type="button" onClick={() => onNavigate("merchants")}><Store size={17} /><span><strong>{credentialRiskCount === 1 ? t("1 merchant key needs rotation") : t("{count} merchant keys need rotation", { count: credentialRiskCount })}</strong><small>{t("Expired or expiring within seven days")}</small></span></button> : null}
           </div>
         </section>
       ) : null}

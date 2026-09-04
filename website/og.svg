@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs><radialGradient id="g" cx="75%" cy="10%" r="80%"><stop stop-color="#b9ff66" stop-opacity=".2"/><stop offset="1" stop-color="#080b0c" stop-opacity="0"/></radialGradient></defs>
+  <rect width="1200" height="630" fill="#080b0c"/><rect width="1200" height="630" fill="url(#g)"/>
+  <g fill="none" stroke="#b9ff66" stroke-width="5"><path d="M82 84 126 58l44 26v52l-44 26-44-26V84Z"/><path d="m104 109 15 15 30-36"/></g>
+  <text x="194" y="127" fill="#f4f8f5" font-family="Arial,sans-serif" font-size="56" font-weight="800">site</text>
+  <text x="80" y="310" fill="#f4f8f5" font-family="Arial,sans-serif" font-size="80" font-weight="800">Deploy to Kubernetes.</text>
+  <text x="80" y="405" fill="#b9ff66" font-family="Arial,sans-serif" font-size="80" font-weight="800">Prove it works.</text>
+  <text x="84" y="500" fill="#9aa4a1" font-family="Arial,sans-serif" font-size="27">Evidence-backed deployment for AI agents and humans.</text>
+  <g transform="translate(900 470)"><rect width="220" height="72" rx="36" fill="#b9ff66"/><text x="37" y="46" fill="#10160f" font-family="Arial,sans-serif" font-size="25" font-weight="800">HTTP 200 ✓</text></g>
+</svg>

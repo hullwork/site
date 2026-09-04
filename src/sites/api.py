@@ -41,6 +41,7 @@ from sites.http_kit import CONSOLE_PREFIX, HTTPKitMixin
 from sites import grafana_proxy
 
 _DEPLOYMENT_PATH = re.compile(r"^/v1/deployments/([^/?]+)$")
+_ADMIN_DEPLOYMENT_PATH = re.compile(r"^/v1/admin/deployments/([^/?]+)$")
 _BUILD_PATH = re.compile(r"^/v1/builds/([^/?]+)$")
 _BUNDLE_PATH = re.compile(r"^/v1/bundles/([^/?]+)$")
 _TENANT_PATH = re.compile(r"^/v1/tenants/([^/?]+)$")
@@ -129,6 +130,7 @@ _ROUTE_TEMPLATES: tuple[tuple[re.Pattern[str], str], ...] = (
     (_TENANT_PATH, "/v1/tenants/{id}"),
     (_MERCHANT_KEY_PATH, "/v1/merchants/{id}/key"),
     (_MERCHANT_PATH, "/v1/merchants/{id}"),
+    (_ADMIN_DEPLOYMENT_PATH, "/v1/admin/deployments/{id}"),
     (_DEPLOYMENT_PATH, "/v1/deployments/{id}"),
     (_BUILD_PATH, "/v1/builds/{id}"),
     (_BUNDLE_PATH, "/v1/bundles/{id}"),
@@ -672,6 +674,9 @@ class Handler(
         if path == "/v1/merchants":
             self._create_merchant()
             return
+        if path == "/v1/admin/deployments":
+            self._admin_create_deployment()
+            return
         merchant_key_match = _MERCHANT_KEY_PATH.fullmatch(path)
         if merchant_key_match:
             self._rotate_merchant_key(merchant_key_match.group(1))
@@ -723,6 +728,12 @@ class Handler(
         merchant_match = _MERCHANT_PATH.fullmatch(path)
         if merchant_match:
             self._disable_merchant(merchant_match.group(1))
+            return
+        admin_deployment_match = _ADMIN_DEPLOYMENT_PATH.fullmatch(path)
+        if admin_deployment_match:
+            self._admin_delete_deployment(
+                admin_deployment_match.group(1), query
+            )
             return
         bundle_match = _BUNDLE_PATH.fullmatch(path)
         if bundle_match:

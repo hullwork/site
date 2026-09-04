@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/hullwork/site"
+Homepage = "https://hullwork.github.io/site/"
 Documentation = "https://github.com/hullwork/site/tree/main/docs"
 Issues = "https://github.com/hullwork/site/issues"
 Security = "https://github.com/hullwork/site/security/advisories/new"

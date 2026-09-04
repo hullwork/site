@@ -1,8 +1,9 @@
 """``/v1/admin/*`` endpoints: the Handler admin mixin.
 
-This mixin provides the cross-merchant read-only overview and health APIs. Every endpoint
+This mixin provides cross-merchant operations, overview, and health APIs. Every endpoint
 requires a platform admin token; ``_require_admin`` is intentionally the first statement
-in each method. See individual methods for the authorization rationale.
+in each method. Mutations require the same CSRF-protected admin session as other unsafe
+console requests. See individual methods for the authorization rationale.
 """
 from __future__ import annotations
 
@@ -12,7 +13,11 @@ from typing import Any
 
 from sites.builds import registry_manifest_digest, site_build_response
 from sites.k8s_resources import CONTROL_PLANE_PROBE_NAME
-from sites.validation import ValidationError
+from sites.validation import (
+    ValidationError,
+    normalize_merchant_id,
+    normalize_user_id,
+)
 from sites.http_kit import QUERY_REFUSED as _QUERY_REFUSED
 from sites.kube import ApiError
 from sites.serializers import deployment_record_response, parse_iso, positive_int
@@ -40,7 +45,7 @@ _IMAGE_DIGEST_DEADLINE_SECONDS = 5.0
 
 
 class AdminMixin:
-    """Cross-merchant deployment overview, control plane health page and image list."""
+    """Cross-merchant application operations, health, builds, and image inventory."""
 
     def _admin_deployments(self, query: dict[str, str]) -> None:
         """Overview of cross-merchant and cross-tenant deployment.
@@ -84,6 +89,41 @@ class AdminMixin:
                 ),
             },
         )
+
+    def _admin_create_deployment(self) -> None:
+        """Create or update one tenant application from the admin console.
+
+        The target identity is explicit and validated. This is deliberately an
+        admin-only route instead of simulated merchant impersonation: an admin
+        session never gains a reusable tenant credential or acting-subject
+        header as a side effect of using the console.
+        """
+        if not self._require_admin():
+            return
+        try:
+            body = self._read_body()
+            merchant_id = normalize_merchant_id(str(body.pop("merchantId", "")))
+            user_id = normalize_user_id(str(body.pop("userId", "")))
+        except ValidationError as exc:
+            self._json(400, {"error": str(exc)})
+            return
+        self._post_deployment_for(merchant_id, user_id, body)
+
+    def _admin_delete_deployment(
+        self, raw_name: str, query: dict[str, str]
+    ) -> None:
+        """Delete exactly one merchant/tenant/service tuple as an admin."""
+        if not self._require_admin():
+            return
+        merchant_id = self._merchant_id_from_query(query, required=True)
+        if merchant_id is _QUERY_REFUSED:
+            return
+        try:
+            user_id = normalize_user_id(query.get("userId", ""))
+        except ValidationError as exc:
+            self._json(400, {"error": str(exc)})
+            return
+        self._delete_deployment_for(raw_name, merchant_id, user_id)
 
     def _admin_health(self) -> None:
         """Physical examination of the control plane itself.

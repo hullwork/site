@@ -4,7 +4,9 @@ import {
   CircleAlert,
   ExternalLink,
   LoaderCircle,
+  Plus,
   Server,
+  Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
@@ -22,7 +24,7 @@ import {
   phaseLabel,
 } from "../format";
 import { useI18n } from "../i18n";
-import type { AdminDeploymentView, MerchantView } from "../types";
+import type { AdminDeploymentView, MerchantView, TenantView } from "../types";
 import { CopyButton, EmptyState, MetricCard, PageHeader, RefreshButton, SearchField } from "./ConsolePrimitives";
 import { PhaseBadge } from "./PhaseBadge";
 import { RuntimeBadge } from "./RuntimeBadge";
@@ -30,11 +32,7 @@ import { RuntimeBadge } from "./RuntimeBadge";
 /**
 * Deployment overview: full deployment across merchants and tenants, filterable by merchant/phase.
 *
-* Polling, stale alarms, phase copywriting and verification display all use the Work UI
-* `web/src/components/DeploymentsView.tsx`——When the admin console and tenant UI view the same deployment
-* The same conclusion must be given.
-*
-* A substantial difference from the tenant UI: what is read here is the database snapshot of `list_all_deployments`,
+* The list reads the database snapshot of `list_all_deployments`,
 * **There is no entry back to Kubernetes** (there is no single detail endpoint in the admin scope in the contract).
 * Therefore, "Run Details" only expands the existing fields in the list, and will not expand and return to the source like the tenant UI;
 * When the snapshot is suspended, this page can only display stale data, and the banner must make it clear.
@@ -66,6 +64,7 @@ export default function DeploymentsView({
   const { localeTag, t } = useI18n();
   const [deployments, setDeployments] = useState<AdminDeploymentView[]>([]);
   const [merchants, setMerchants] = useState<MerchantView[]>([]);
+  const [tenants, setTenants] = useState<TenantView[]>([]);
   const [phase, setPhase] = useState("");
   const [runtime, setRuntime] = useState("");
   const [snapshotAge, setSnapshotAge] = useState<number | null | undefined>(undefined);
@@ -76,6 +75,17 @@ export default function DeploymentsView({
   // The last refresh failed: the card below is still the same card as before the failure, and must be marked, otherwise people who see it will not be able to tell the difference.
   // Which states still count.
   const [stale, setStale] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [mutating, setMutating] = useState("");
+  const [formError, setFormError] = useState("");
+  const [draftMerchant, setDraftMerchant] = useState("");
+  const [draftUser, setDraftUser] = useState("");
+  const [draftName, setDraftName] = useState("");
+  const [draftImage, setDraftImage] = useState("");
+  const [draftPort, setDraftPort] = useState("8080");
+  const [draftHealthPath, setDraftHealthPath] = useState("/");
+  const [draftExposure, setDraftExposure] = useState<"public" | "internal">("public");
+  const [draftMemory, setDraftMemory] = useState("512Mi");
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -99,11 +109,78 @@ export default function DeploymentsView({
   }, [merchantFilter, onError, phase]);
 
   useEffect(() => {
-    api.listMerchants()
-      .then((response) => setMerchants(response.merchants ?? []))
+    Promise.all([api.listMerchants(), api.listTenants()])
+      .then(([merchantResponse, tenantResponse]) => {
+        const merchantRows = merchantResponse.merchants ?? [];
+        const tenantRows = tenantResponse.tenants ?? [];
+        setMerchants(merchantRows);
+        setTenants(tenantRows);
+        const firstTenant = tenantRows.find((item) => !item.disabledAt);
+        if (firstTenant) {
+          setDraftMerchant((value) => value || firstTenant.merchantId);
+          setDraftUser((value) => value || firstTenant.userId);
+        }
+      })
       // The failure of the filter dropdown shouldn't make the entire page fail: the list itself is still useful.
       .catch(() => setMerchants([]));
   }, []);
+
+  const targetTenants = tenants.filter(
+    (item) => item.merchantId === draftMerchant && !item.disabledAt,
+  );
+
+  const submitDeployment = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setFormError("");
+    const port = Number(draftPort);
+    if (!draftMerchant || !draftUser || !draftName.trim() || !draftImage.trim()) {
+      setFormError(t("Merchant, tenant, application name, and image are required."));
+      return;
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setFormError(t("Container port must be an integer from 1 to 65535."));
+      return;
+    }
+    setMutating("__create__");
+    try {
+      await api.createDeployment({
+        merchantId: draftMerchant,
+        userId: draftUser,
+        name: draftName.trim(),
+        image: draftImage.trim(),
+        port,
+        healthPath: draftHealthPath.trim() || "/",
+        exposure: draftExposure,
+        memoryLimit: draftMemory.trim() || "512Mi",
+      });
+      setCreating(false);
+      setDraftName("");
+      setDraftImage("");
+      await load(true);
+    } catch (cause) {
+      setFormError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setMutating("");
+    }
+  };
+
+  const deleteDeployment = async (deployment: AdminDeploymentView) => {
+    const identity = `${deployment.merchantId}/${deployment.userId}/${deployment.serviceName}`;
+    if (!window.confirm(t("Delete application {identity}? Its workload and public route will be reclaimed.", { identity }))) return;
+    setMutating(identity);
+    try {
+      await api.deleteDeployment(
+        deployment.merchantId,
+        deployment.userId,
+        deployment.serviceName,
+      );
+      await load(true);
+    } catch (cause) {
+      onError(cause);
+    } finally {
+      setMutating("");
+    }
+  };
 
   useEffect(() => { void load(); }, [load]);
 
@@ -162,7 +239,12 @@ export default function DeploymentsView({
         title={t("Deployments")}
         description={t("View cross-merchant deployment snapshots, control-plane verification evidence, and public access URLs. Status comes from database snapshots and is not presented as a live Kubernetes view.")}
         meta={<span aria-live="polite">{lastUpdated ? t("Updated {time}", { time: lastUpdated.toLocaleTimeString(localeTag) }) : t("Not updated yet")} · {t("snapshot")} {snapshotAge === undefined ? t("Not reported") : snapshotAge === null ? t("Never synced") : t("{count} seconds ago", { count: snapshotAge.toFixed(1) })}</span>}
-        actions={<RefreshButton refreshing={loading || refreshing} onRefresh={() => void load(true)} />}
+        actions={<div className="page-actions">
+          <RefreshButton refreshing={loading || refreshing} onRefresh={() => void load(true)} />
+          <button type="button" className="button button-primary" onClick={() => { setCreating((value) => !value); setFormError(""); }}>
+            <Plus size={15} />{t("Deploy application")}
+          </button>
+        </div>}
       />
 
       <section className="metric-grid" aria-label={t("Deployment summary")}>
@@ -175,6 +257,25 @@ export default function DeploymentsView({
       </section>
 
       <section className="workspace-card">
+        {creating ? (
+          <form className="form-panel deployment-form" onSubmit={(event) => void submitDeployment(event)}>
+            <label className="field"><span>{t("Merchant")}</span><select value={draftMerchant} onChange={(event) => {
+              const next = event.target.value;
+              setDraftMerchant(next);
+              setDraftUser(tenants.find((item) => item.merchantId === next && !item.disabledAt)?.userId ?? "");
+            }}><option value="">{t("Please select")}</option>{merchants.filter((item) => !item.disabledAt).map((item) => <option key={item.merchantId} value={item.merchantId}>{item.merchantId}</option>)}</select></label>
+            <label className="field"><span>{t("Tenant ID")}</span><select value={draftUser} onChange={(event) => setDraftUser(event.target.value)}><option value="">{t("Please select")}</option>{targetTenants.map((item) => <option key={`${item.merchantId}/${item.userId}`} value={item.userId}>{item.userId}</option>)}</select></label>
+            <label className="field"><span>{t("Application name")}</span><input value={draftName} placeholder="hello-site" onChange={(event) => setDraftName(event.target.value)} /></label>
+            <label className="field deployment-image-field"><span>{t("Container image")}</span><input value={draftImage} placeholder="registry.example/app@sha256:..." onChange={(event) => setDraftImage(event.target.value)} /></label>
+            <label className="field field-narrow"><span>{t("Container port")}</span><input type="number" min={1} max={65535} value={draftPort} onChange={(event) => setDraftPort(event.target.value)} /></label>
+            <label className="field field-narrow"><span>{t("Health path")}</span><input value={draftHealthPath} onChange={(event) => setDraftHealthPath(event.target.value)} /></label>
+            <label className="field field-narrow"><span>{t("Exposure")}</span><select value={draftExposure} onChange={(event) => setDraftExposure(event.target.value as "public" | "internal")}><option value="public">{t("Public")}</option><option value="internal">{t("Internal")}</option></select></label>
+            <label className="field field-narrow"><span>{t("Memory limit")}</span><input value={draftMemory} onChange={(event) => setDraftMemory(event.target.value)} /></label>
+            <div className="form-actions"><button className="button button-primary" type="submit" disabled={mutating === "__create__"}>{mutating === "__create__" ? <LoaderCircle className="spin" size={16} /> : null}{t("Deploy or update")}</button><button className="button" type="button" onClick={() => setCreating(false)}>{t("Cancel")}</button></div>
+            {formError ? <p className="form-error" role="alert">{formError}</p> : null}
+            <p className="form-note">{t("Use an existing container image. Submitting the same merchant, tenant, and application name updates that application.")}</p>
+          </form>
+        ) : null}
         <div className="workspace-toolbar deployment-toolbar">
           <SearchField value={query} onChange={setQuery} label={t("Search deployment")} placeholder={t("Search for services, tenants, images, or status reasons")} />
           <div className="workspace-filters">
@@ -235,7 +336,7 @@ export default function DeploymentsView({
           <EmptyState
             icon={<Boxes size={22} />}
             title={query || merchantFilter || phase || runtime ? t("No matching deployment") : t("Not yet deployed on the platform")}
-            description={query || merchantFilter || phase || runtime ? t("Adjust search term, merchant, phase or flex status filters.") : t("Deployments submitted via CLI, MCP, or Work UI will appear here.")}
+            description={query || merchantFilter || phase || runtime ? t("Adjust search term, merchant, phase or flex status filters.") : t("Deploy an existing container image here, or submit through CLI, MCP, or HTTP API.")}
           />
         ) : (
           <div className={`deploy-list ${stale ? "is-stale" : ""}`}>
@@ -258,6 +359,9 @@ export default function DeploymentsView({
                         <span className="owner-chip mono">
                           {deployment.merchantId} / {deployment.userId}
                         </span>
+                        <span className={`badge ${deployment.exposure === "internal" ? "badge-neutral" : "badge-ok"}`}>
+                          {deployment.exposure === "internal" ? t("Internal") : t("Public")}
+                        </span>
                       </div>
                       <p>{deployment.message || t("Sites have not reported detailed status yet")}</p>
                       <span className="deploy-updated">
@@ -265,12 +369,12 @@ export default function DeploymentsView({
                         {deployment.verification ? ` · ${t(deployment.verification.ok ? "control-plane verification passed" : "control-plane verification failed")}` : ` · ${t("No verification evidence returned")}`}
                       </span>
                     </div>
-                    {href ? (
+                    <div className="deploy-card-actions">{href ? (
                       <a className="button button-small" href={href} target="_blank" rel="noopener noreferrer">
                         <ExternalLink size={14} />
                         {deployment.runtimeState === "Dormant" ? t("Open (cold start)") : t("Open")}
                       </a>
-                    ) : null}
+                    ) : null}<button type="button" className="button button-small button-danger" disabled={mutating === `${deployment.merchantId}/${deployment.userId}/${deployment.serviceName}` || deployment.phase === "Deleting"} onClick={() => void deleteDeployment(deployment)}><Trash2 size={14} />{t("Delete")}</button></div>
                   </div>
                   <details className="deploy-details">
                     <summary>{t("Run details")}</summary>
@@ -299,9 +403,10 @@ export default function DeploymentsView({
                             // A non-whitelisted scheme is downgraded to plain text. Do not make it clickable,
                             // but do not hide it: hiding it would suggest the control plane returned no URL.
                             <span className="mono">{t("{url} (not http/https; link blocked)", { url: deployment.url })}</span>
-                          ) : "—"}
+                          ) : deployment.exposure === "internal" ? t("Internal only — no public URL") : t("Waiting for a public URL")}
                         </dd>
                       </div>
+                      {deployment.siteVersion ? <div><dt>{t("Site version")}</dt><dd className="mono">v{deployment.siteVersion}</dd></div> : null}
                       <div><dt>{t("Control plane verification")}</dt><dd>{verificationLabel(deployment.verification, t)}</dd></div>
                       {deployment.verification?.bodySha256 ? (
                         <div>

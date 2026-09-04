@@ -47,7 +47,7 @@ data:
   SITES_GATEWAY_HOST_PORT: "18090"
   # The tenant image is in the workload registry, not the CP Registry that hosts the control plane image.
   # The node containerd receives this stable name from the deployment portal to the Registry pull Service.
-  SITES_REGISTRY_PULL_HOST: "site-registry.convee.local:5000"
+  SITES_REGISTRY_PULL_HOST: {{ .Values.registry.pullHost | quote }}
 {{- if ne .Values.namespaces.gateway .Release.Namespace }}
 ---
 apiVersion: v1

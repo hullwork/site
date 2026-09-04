@@ -1,12 +1,12 @@
 SHELL := /usr/bin/env bash
-CONTROL_IMAGE ?= registry.convee.local:5000/sites-control:local
+CONTROL_IMAGE ?= site-control:local
 
-.PHONY: help install test test-db test-db-down test-supabase test-oss console image chart-lint chart-render benchmark standalone-install standalone-smoke standalone-uninstall
+.PHONY: help install test test-db test-db-down test-supabase test-oss console homepage-check image chart-lint chart-render benchmark quickstart quickstart-status quickstart-access quickstart-token quickstart-clean standalone-install standalone-smoke standalone-uninstall
 
 # Generated from the targets themselves rather than kept as a second list. The
 # hand-written listing this replaces had already lost `help`, and nothing could
 # have told anyone: a target and its description lived in two places that no
-# check compared. sandbox and agent read their Makefiles the same way.
+# check compared.
 help: ## — list every target with its one-line description
 	@grep -E '^[a-z][a-z0-9-]*:.*## — ' Makefile | sed 's/:.*## — / — /'
 
@@ -57,6 +57,9 @@ console: ## — lint, typecheck, and build the console
 	npm --prefix console run typecheck
 	npm --prefix console run build
 
+homepage-check: ## — validate the GitHub Pages homepage contract
+	python3 scripts/check-homepage.py
+
 image: ## — build sites-control from this repository only
 	docker build -t $(CONTROL_IMAGE) .
 
@@ -70,11 +73,26 @@ CHART_VALUES ?= --set-string clusterNetwork.podCIDR=$(CHART_POD_CIDR)
 chart-lint: ## — validate the product-owned Helm package
 	helm lint charts/site $(CHART_VALUES)
 
-chart-render: ## — render the Helm package without an Infra checkout
+chart-render: ## — render the self-contained Helm package
 	helm template site charts/site $(CHART_VALUES) >/dev/null
 
 benchmark: ## — run the fail-closed deterministic benchmark profile
 	uv run --locked --extra dev python scripts/run-benchmark.py --profile contract
+
+quickstart: ## — build and prove Site on a disposable kubeadm VM
+	scripts/quickstart-kubeadm.sh up
+
+quickstart-status: ## — inspect the disposable kubeadm trial
+	scripts/quickstart-kubeadm.sh status
+
+quickstart-access: ## — open and serve the console from the disposable kubeadm trial
+	scripts/quickstart-kubeadm.sh access
+
+quickstart-token: ## — print the disposable trial's local admin token
+	scripts/quickstart-kubeadm.sh token
+
+quickstart-clean: ## — delete only the disposable Site kubeadm VM
+	scripts/quickstart-kubeadm.sh clean
 
 standalone-install: ## — bootstrap local Secrets and install the Helm Chart
 	scripts/standalone.sh install

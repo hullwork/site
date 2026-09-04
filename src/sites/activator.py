@@ -81,7 +81,7 @@ FORCE_REFRESH_MIN_SECONDS = float(
 # 2026-08-19). Beyond the cap the activator answers 503 + Retry-After instead of dying.
 MAX_INFLIGHT = int(getenv("SITES_ACTIVATOR_MAX_INFLIGHT", "64") or "64")
 # How long should you wait for a cold start? 🔴 It only constrains the **wakeup** section, and does not constrain the response after wakeup - SSE,
-# Large file downloads and long polling should not be truncated by this value (p2s-splash stepped on: holdTimeout covers the entire
+# Large file downloads and long polling should not be truncated by this value: holdTimeout covers the entire
 # When the link is connected, the slow response is cut off in the middle, and the symptom is "the download is gone halfway" without pointing to any timeout configuration).
 WAKE_TIMEOUT_SECONDS = float(getenv("SITES_ACTIVATOR_WAKE_TIMEOUT", "30") or "30")
 READY_POLL_SECONDS = float(getenv("SITES_ACTIVATOR_POLL_INTERVAL", "0.25") or "0.25")
