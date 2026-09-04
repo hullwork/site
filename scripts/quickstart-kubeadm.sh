@@ -172,13 +172,22 @@ prove_site() {
     --set images.control.repository=site-control \
     --set images.control.tag=quickstart \
     --set-value monitoring.enabled=true
+  # A truly new node may need several minutes to pull the pinned database,
+  # registry, proxy, and Prometheus images. Do not spend the API rollout budget
+  # while its dependencies are still downloading.
+  for workload in \
+    statefulset/sites-postgres \
+    deployment/sites-registry \
+    deployment/sites-prometheus; do
+    kube -n "$namespace" rollout status "$workload" --timeout=15m
+  done
   # The development tag intentionally stays stable. Helm therefore sees no Pod
   # template change on a warm rerun even though containerd now has a new image;
   # restart every control-image consumer so a successful rerun proves this checkout.
   kube -n "$namespace" rollout restart \
     deployment/sites-api deployment/sites-operator deployment/sites-activator
   for deployment in sites-api sites-operator sites-activator; do
-    kube -n "$namespace" rollout status "deployment/$deployment" --timeout=5m
+    kube -n "$namespace" rollout status "deployment/$deployment" --timeout=10m
   done
   KUBECONFIG="$kubeconfig" SITES_KUBE_CONTEXT="$context" \
     "$root/scripts/standalone.sh" smoke

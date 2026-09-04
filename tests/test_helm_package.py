@@ -55,6 +55,12 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn('public URL body digest', script)
         self.assertIn('rollout restart', script)
         self.assertIn('deployment/sites-api deployment/sites-operator deployment/sites-activator', script)
+        dependency_wait = script.index('statefulset/sites-postgres')
+        restart = script.index('rollout restart')
+        self.assertLess(dependency_wait, restart)
+        self.assertIn('deployment/sites-registry', script[dependency_wait:restart])
+        self.assertIn('deployment/sites-prometheus', script[dependency_wait:restart])
+        self.assertIn('--timeout=15m', script[dependency_wait:restart])
 
     def test_newcomer_docs_name_kubeadm_and_not_the_kind_tool(self) -> None:
         docs = "\n".join(
