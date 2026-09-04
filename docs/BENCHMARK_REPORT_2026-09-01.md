@@ -27,7 +27,7 @@ run. The evidence checksum manifest verifies successfully.
 - Profile: `cluster`, benchmark contract `1.0.0`
 - Run id: `d29b64e1-5404-4a02-bb14-4caa9931b66c`
 - Run window: 2026-08-31 23:09:41–23:52:24 UTC
-- Kubernetes: Kind server v1.37.0 on Linux arm64
+- Kubernetes: ephemeral Kubernetes server v1.37.0 on Linux arm64
 - Host: macOS 26.5.1 arm64; Python 3.13.2
 - Chart source digest: `sha256:9b7b2d4de9e4551aed9ba82f5e53447be95dbf5ccf627bc56ae2d661eaca2545`
 - Images were immutable digest references recorded in `cluster-result.json`.
@@ -45,7 +45,7 @@ another cluster run records them.
 
 ## Interpretation and limits
 
-This is strong lifecycle correctness evidence for the reference Kind topology,
+This is strong lifecycle correctness evidence for the recorded ephemeral topology,
 not a claim about Internet-scale hosting. It does not measure concurrent tenant
 load, sustained request throughput, geographic latency, managed PostgreSQL, or
 a production S3/OSS deployment. Rollback p95 has a long tail and remains a

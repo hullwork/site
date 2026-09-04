@@ -214,9 +214,9 @@ class NodePortExposure(ExposureBackend):
 class GatewayExposure(ExposureBackend):
     """Gateway API backend: Host is the identity, and there is no upper limit on the number of sites.
 
-    Isomorphic with p2s - the operator of p2s also builds an HTTPRoute for each application and hangs it on the share
-    on Gateway. When connecting scale-to-zero in the future, you only need to change the backendRef from the site Service
-    Replace it with activator, and the routing form itself will not change (this is exactly the access method of p2s-splash).
+    The operator builds an HTTPRoute for each public application on the shared Gateway.
+    Scale-to-zero keeps the same route shape and switches backendRef from the site Service
+    to the activator.
     """
 
     name = "gateway"

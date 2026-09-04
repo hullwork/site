@@ -22,6 +22,48 @@ POD_CIDR = ("--set-string", "clusterNetwork.podCIDR=10.201.0.0/16")
 
 
 class HelmPackageContractTests(unittest.TestCase):
+    def test_quickstart_is_a_repository_owned_kubeadm_workflow(self) -> None:
+        script = (ROOT / "scripts" / "quickstart-kubeadm.sh").read_text(encoding="utf-8")
+        self.assertIn("sudo kubeadm init", script)
+        self.assertIn('getent hosts "$vm"', script)
+        self.assertIn("dev/kubeadm/lima.yaml", script)
+
+    def test_quickstart_lima_template_needs_no_precreated_network(self) -> None:
+        template = yaml.safe_load(
+            (ROOT / "dev" / "kubeadm" / "lima.yaml").read_text(encoding="utf-8")
+        )
+        self.assertNotIn("networks", template)
+        self.assertEqual(template["portForwards"][0]["guestPort"], 6443)
+        forwards = {
+            item["guestPort"]: item["hostPort"]
+            for item in template["portForwards"]
+        }
+        self.assertEqual(forwards[30080], 18090)
+        self.assertEqual(forwards[30088], 18098)
+        self.assertNotIn(30081, forwards)
+
+    def test_makefile_exposes_the_complete_kubeadm_trial_lifecycle(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        for target in ("quickstart", "quickstart-status", "quickstart-access", "quickstart-token", "quickstart-clean"):
+            self.assertRegex(makefile, rf"(?m)^{target}:")
+        script = (ROOT / "scripts" / "quickstart-kubeadm.sh").read_text(encoding="utf-8")
+        self.assertIn('open "$url"', script)
+        self.assertIn('xdg-open "$url"', script)
+        self.assertIn('token) require_command kubectl; show_token ;;', script)
+        self.assertIn('"merchantId":"local","userId":"local"', script)
+        self.assertIn('--exposure public', script)
+        self.assertIn('public URL body digest', script)
+        self.assertIn('rollout restart', script)
+        self.assertIn('deployment/sites-api deployment/sites-operator deployment/sites-activator', script)
+
+    def test_newcomer_docs_name_kubeadm_and_not_the_kind_tool(self) -> None:
+        docs = "\n".join(
+            (ROOT / path).read_text(encoding="utf-8")
+            for path in ("README.md", "docs/STANDALONE.md")
+        )
+        self.assertIn("kubeadm", docs)
+        self.assertNotRegex(docs, r"(?i)\bkind\b")
+
     def test_standalone_release_namespace_is_not_redeclared(self) -> None:
         rendered = subprocess.check_output([
             "helm", "template", "site", str(CHART),
@@ -45,9 +87,8 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn('kill -0 "$forward_pid"', standalone)
         self.assertNotIn("SITES_SMOKE_PORT:-18091", standalone)
 
-    def test_chart_has_canonical_optional_composition_descriptor(self) -> None:
+    def test_chart_has_canonical_independent_release_metadata(self) -> None:
         chart = yaml.safe_load((CHART / "Chart.yaml").read_text(encoding="utf-8"))
-        package = yaml.safe_load((CHART / "package.yaml").read_text(encoding="utf-8"))
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(chart["name"], "site")
         self.assertEqual(chart["version"], project["project"]["version"])
@@ -55,9 +96,7 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertEqual("MIT", chart["annotations"]["artifacthub.io/license"])
         self.assertEqual("MIT", project["project"]["license"])
         self.assertEqual("MIT License", (ROOT / "LICENSE").read_text().splitlines()[0])
-        self.assertEqual(package["apiVersion"], "infra.convee.io/v1alpha1")
-        self.assertEqual(package["spec"]["source"]["renderer"], "helm")
-        self.assertIn("kubernetes.api", package["spec"]["capabilities"]["requires"])
+        self.assertFalse((CHART / "package.yaml").exists())
 
     def test_all_images_accept_digest_overrides(self) -> None:
         schema = json.loads((CHART / "values.schema.json").read_text(encoding="utf-8"))
@@ -177,6 +216,7 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn("prepare-release-chart.py prepare", workflow)
         self.assertIn("prepare-release-chart.py verify", workflow)
         self.assertIn("digestPinnedValues", workflow)
+        self.assertNotIn("packageDescriptor", workflow)
         self.assertIn("SHA256SUMS", workflow)
         self.assertIn("staging-${{ github.run_id }}-${{ github.run_attempt }}", workflow)
         self.assertIn("scanners: vuln,secret", workflow)
@@ -266,9 +306,12 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertNotIn("--force-conflicts", standalone)
         adapter = scripts[2].read_text(encoding="utf-8")
         self.assertIn("SITES_KUBE_CONTEXT", adapter)
+        self.assertIn("SITES_CLUSTER_POD_CIDR", adapter)
+        self.assertIn("SITES_LOCAL_PATH_PROVISIONER_ENABLED", adapter)
         self.assertIn("SITES_CONTROL_IMAGE_DIGEST", adapter)
         self.assertNotIn("INFRA_", adapter)
         self.assertNotIn("limactl", adapter)
+
 
 
 if __name__ == "__main__":

@@ -2,9 +2,8 @@
  * Presentation-layer pure functions: phase labels, time formatting, and URL sanitizing.
  *
  * These functions turn server fields into human-readable text without making requests
- * or holding state. Phase wording and polling intervals intentionally mirror
- * `web/src/components/DeploymentsView.tsx`, the current Work UI convention, so the
- * administrative and tenant surfaces describe the same phase consistently.
+ * or holding state. This module is the console's source of truth for phase wording
+ * and polling intervals.
  */
 
 /** Phases that are still progressing and deserve closer attention in list views. */

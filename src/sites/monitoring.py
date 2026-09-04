@@ -16,6 +16,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from sites import exposure
 from sites.naming import namespace_for_tenant
 from sites.validation import dns_label, normalize_merchant_id, normalize_user_id
 
@@ -169,7 +170,12 @@ def _monitoring_response(
     key, seconds, step = _range(range_key)
     end = int(time.time())
     start = end - seconds
-    catalog = _series_catalog(scope, namespace, service)
+    traffic_available = exposure.backend().name == "gateway"
+    catalog = [
+        item
+        for item in _series_catalog(scope, namespace, service)
+        if traffic_available or item["id"] not in {"requests", "errors", "latencyP95"}
+    ]
     base: dict[str, Any] = {
         "scope": scope,
         "range": {"key": key, "start": start, "end": end, "stepSeconds": step},
@@ -177,6 +183,12 @@ def _monitoring_response(
             "available": True,
             "sampledAt": dt.datetime.fromtimestamp(end, dt.timezone.utc).isoformat(),
             "retention": "24h",
+            "trafficAvailable": traffic_available,
+            "trafficReason": (
+                None
+                if traffic_available
+                else "traffic metrics require gateway exposure"
+            ),
         },
         "identity": identity,
     }
@@ -193,6 +205,8 @@ def _monitoring_response(
             "sampledAt": base["source"]["sampledAt"],
             "retention": "24h",
             "error": "metrics backend unavailable",
+            "trafficAvailable": traffic_available,
+            "trafficReason": base["source"]["trafficReason"],
         }
         base["summary"] = {}
         base["series"] = []

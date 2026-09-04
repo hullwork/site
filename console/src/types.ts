@@ -6,7 +6,7 @@
 * In parallel, field name misalignment is the only failure mode that cannot be found by typecheck.
 * Boundary: The field marked `?` means "This version of the server may not have been provided yet", not "can be omitted". The render layer must
 * There is a default copy, so you cannot rely on `!`. The timestamp is an ISO string (a product of `_iso_timestamp`),
-* Not Unix seconds - intentionally different from sandbox/console's Portal view.
+* Not Unix seconds; renderers must parse it as an ISO timestamp.
  */
 
 /** Deploy phase seven states. Any new phase is defined by the server, and the frontend is only responsible for the backend copywriting. */
@@ -44,6 +44,10 @@ export interface MerchantView {
   deploymentCount?: number;
   createdAt?: string | null;
   disabledAt?: string | null;
+  /** Expiry of the currently active merchant API key, when one has been issued. */
+  keyExpiresAt?: string | null;
+  /** Whether this merchant credential may select tenant subjects explicitly. */
+  mayActAsSubjects?: boolean;
   /**
 * The resource limit of each tenant Namespace under this merchant name. Server-side constant echo—not configured separately
 * The merchant provides a deployment-level default value, so there is no need to distinguish between "not configured" and "equipped with a default value", it is
@@ -126,8 +130,9 @@ export interface TenantTokenResponse {
 *
 * Go to `list_all_deployments`, which reads the **database snapshot** instead of the Kubernetes authoritative source.
 * Staleness is specified by `snapshotAgeSeconds` in the response.
-* `verification` is optional because there is no status full text in the snapshot table - if the server does not
-* If this is added to the aggregation, the admin console will not be able to get the evidence (there is no single detail endpoint in the admin scope).
+* Verification and the submitted artifact digest are persisted from CR status by
+* the snapshot synchronizer. They remain optional while an older row awaits its
+* first post-upgrade sweep.
  */
 export interface AdminDeploymentView {
   /** CR name. Different from serviceName: the former contains merchant/user summary and is globally unique. */
@@ -146,6 +151,9 @@ export interface AdminDeploymentView {
   image?: string | null;
   port?: number | null;
   healthPath?: string | null;
+  exposure?: "public" | "internal" | string;
+  siteVersion?: number | null;
+  memoryLimit?: string | null;
   revision?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -275,7 +283,14 @@ export interface MetricSeries {
 export interface MonitoringResponse {
   scope: "cluster" | "application";
   range: { key: MetricsRange; start: number; end: number; stepSeconds: number };
-  source: { available: boolean; sampledAt: string; retention: string; error?: string };
+  source: {
+    available: boolean;
+    sampledAt: string;
+    retention: string;
+    error?: string;
+    trafficAvailable?: boolean;
+    trafficReason?: string;
+  };
   identity?: { merchantId: string; userId: string; serviceName: string } | null;
   summary: Record<string, number | null>;
   series: MetricSeries[];

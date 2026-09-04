@@ -479,8 +479,10 @@ def _add_admin_commands(sub: argparse._SubParsersAction) -> None:
     tenant_rotate = tenants_sub.add_parser(
         "rotate",
         help="issue a new token; also re-enables a disabled tenant",
-        description="The old token is invalidated within the same write. Deactivated tenants will be restored together - and will be replaced"
-        "The person with the certificate wants the tenant to be able to use it.",
+        description=(
+            "The old token is invalidated atomically. Rotating also re-enables "
+            "a disabled tenant."
+        ),
     )
     tenant_rotate.add_argument("name")
     tenant_rotate.add_argument("--merchant", required=True)

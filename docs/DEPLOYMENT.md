@@ -4,11 +4,11 @@
 
 `charts/site` is the product-owned, independently renderable deployment
 contract. Helm, Argo CD, Flux, and other OCI-aware GitOps controllers can
-consume it without cloning an Infra repository:
+consume it directly. Supply the real Pod CIDR of the target cluster:
 
 ```bash
-helm lint charts/site
-helm template site charts/site
+helm lint charts/site --set-string clusterNetwork.podCIDR=10.244.0.0/16
+helm template site charts/site --set-string clusterNetwork.podCIDR=10.244.0.0/16
 ```
 
 The default Services use `ClusterIP` and do not reserve host NodePorts. Local
@@ -16,15 +16,14 @@ path provisioning, Gateway API integration, and monitoring are opt-in; embedded
 PostgreSQL and the build plane are independently switchable. All images accept
 digest overrides through the validated `values.schema.json` surface.
 
-`package.yaml` is optional composition metadata and is not read by Helm. Tagged
-releases publish the chart to `oci://ghcr.io/hullwork/charts/site` plus a
-machine-readable package metadata asset. A runnable deployment also requires
+Tagged releases publish the chart to `oci://ghcr.io/hullwork/charts/site` plus a
+project-owned, machine-readable release metadata asset. A runnable deployment also requires
 the release workflow to have published the corresponding `site-control`
 image; publishing the chart alone is not runtime acceptance.
 
 This is a multi-namespace package. Override `namespaces.control` and
-`namespaces.gateway` through Helm values; an Infra Stack destination namespace
-does not relocate these resources. Release `package-metadata.json` carries the
+`namespaces.gateway` through Helm values; the Helm release namespace does not
+relocate these resources. Release `package-metadata.json` carries the
 OCI Chart digest and the digest-pinned `images.control` value using the shared
 release schema.
 
@@ -63,21 +62,21 @@ Chart whose default control image is injected with the image digest built by tha
 workflow, plus a separate `site-values-VERSION.yaml` digest-pinned override and
 `SHA256SUMS`. Release CI rejects a rendered control image without `@sha256:`.
 
-## Local Lima environment
+## Local kubeadm environment
 
-Prerequisites for repository validation: a container image builder, kubectl, OpenSSL, uv,
-and Node.js 22/npm. The runtime cluster is provisioned separately with Lima and GitOps.
+Prerequisites for the complete local trial: Lima, Docker, kubectl, Helm, uv, and
+Python 3.12+. The repository creates one disposable VM and bootstraps Kubernetes
+with kubeadm; it does not use a shared cluster or another checkout.
 
 ```bash
-make install
-make test
-make console
-make image
+make quickstart
+make quickstart-status
+make quickstart-access
+make quickstart-clean
 ```
 
-The reference integration uses separate Lima control-plane and worker VMs. Its GitOps
-layer installs this repository's Helm chart, injects Secrets, and records both the source
-revision and immutable image digest. Cluster start/stop and cleanup are deliberately not
+The quickstart uses a single node to minimize first-run time. Production cluster
+provisioning, upgrades, backup, and disaster recovery are deliberately not
 implemented in this repository.
 
 The chart defaults deploy the core API, operator, PostgreSQL, registry, build

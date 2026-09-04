@@ -70,6 +70,11 @@ database:
   name: sites
   user: sites
 
+# Node-reachable address for images produced by the optional build plane. A
+# multi-node or remote cluster must point this at its registry mirror/route.
+registry:
+  pullHost: localhost:5000
+
 # site never creates credential material. Create these Secrets before
 # installing the Chart; scripts/bootstrap-standalone-secrets.sh is a safe local
 # development helper. Key names are configurable for external secret managers.

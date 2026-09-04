@@ -1,10 +1,14 @@
 # site
 
 [![CI](https://github.com/hullwork/site/actions/workflows/ci.yml/badge.svg)](https://github.com/hullwork/site/actions/workflows/ci.yml)
+[![Homepage](https://img.shields.io/badge/homepage-live-b9ff66?logo=githubpages&logoColor=111)](https://hullwork.github.io/site/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **A deployment control plane that lets an AI agent ship a website to Kubernetes — and
 then proves the deployment actually serves traffic.**
+
+See the project story, architecture, and one-command demo at
+**[hullwork.github.io/site](https://hullwork.github.io/site/)**.
 
 An agent asks for a deployment over HTTP, CLI, or MCP. The control plane admits it against
 a tenant quota, converges it through a Kubernetes custom resource, and — once the workload
@@ -14,7 +18,60 @@ not a claim.
 
 **Status: alpha.** The reference topology targets local and controlled
 environments, not a public hosting platform — [Known limitations](#known-limitations) is deliberately specific.
-**One of four.** [`hullwork/platform-composition`](https://github.com/hullwork/platform-composition) is where the four repositories are described together.
+
+## See the proof locally
+
+The fastest path is deliberately end to end. With Lima, Docker, `kubectl`, Helm, `uv`,
+and Python 3.12+ installed, one command creates a disposable single-node Kubernetes
+cluster with `kubeadm`, builds the image from this checkout, installs Site and Prometheus,
+deploys the included HTML example, and refuses to pass until both server-side HTTP
+verification and the administrative observability APIs return real evidence:
+
+```bash
+git clone https://github.com/hullwork/site.git
+cd site
+make quickstart
+```
+
+A successful run ends with facts rather than only a Helm exit code:
+
+```text
+Site kubeadm quickstart passed
+  elapsed: <seconds>
+  phase: Running
+  HTTP verification: 200
+  body SHA-256: <digest of the served response>
+  public URL: http://127.0.0.1:18090
+  public URL body: matches verification digest
+  observability: available
+```
+
+See the same application, dependency health, verification result, and metrics in the
+management console. Keep the first command running; it opens the browser automatically
+when possible:
+
+```bash
+# terminal 1
+make quickstart-access
+
+# terminal 2
+make quickstart-token
+```
+
+Paste the second command's value into **Admin token** and choose **Enter the console**.
+The included application is visible immediately under **Applications** as
+`local/local/hello-site`; its HTTP verification and digests are in **Run details**, and
+its **Open** action reaches the browser-visible address. CPU/memory samples are under
+**Monitor → Single application**. Use **Deploy application** to create or update an
+application from an existing container image; choose **Public** to receive a browser URL,
+or **Internal** when no public URL should exist. The token remains in
+a Kubernetes Secret and is never written into this checkout or browser storage. Inspect
+the running objects with `make quickstart-status`; remove only the `site-quickstart` Lima
+VM and repository-local kubeconfig with `make quickstart-clean`.
+
+This trial harness is entirely owned by this repository: it uses Lima's default network,
+bootstraps Kubernetes directly with kubeadm, and builds the control image locally. No
+other checkout, shared cluster configuration, or pre-published Site image is required.
 
 ```text
  ┌─ an agent asks for a deployment ────────────────────────────────────────┐
@@ -56,7 +113,7 @@ environments, not a public hosting platform — [Known limitations](#known-limit
  billing, organizational RBAC.
 ```
 
-## Quickstart
+## Development quickstart
 
 ### Build and test it (no Kubernetes cluster needed)
 
@@ -68,7 +125,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1023 tests
+make test        # 1030 tests
 make test-db-down
 ```
 
@@ -83,25 +140,31 @@ uv run --locked sites --help
 uv run --locked python scripts/evaluate-scaffolds.py   # non-mutating scaffold evaluation
 ```
 
-### Install it into a cluster
+### Install it into an existing cluster
 
-Requires a working `kubectl` context, plus Helm. This installs into the context `kubectl`
-currently points at — check it first.
+The one-command kubeadm path above is the supported source-checkout trial. For another
+cluster, the control image must already be pullable by that cluster, and you must supply
+the cluster's real Pod CIDR. A wrong CIDR is a tenant-isolation failure, so the Chart
+does not guess one. Released versions publish a matching image and OCI Chart together;
+before the first release, build and publish or load the image yourself.
 
 ```bash
 kubectl config current-context
-make standalone-install    # bootstraps development-only Secrets, installs the Chart
-make standalone-smoke      # waits for rollouts, port-forwards, requires /readyz to pass
-make standalone-uninstall  # keeps the namespace, Secrets, and PVCs
+SITES_KUBE_CONTEXT=my-context \
+SITES_CONTROL_IMAGE_REPOSITORY=registry.example/site-control \
+SITES_CONTROL_IMAGE_TAG=v0.1.0 \
+SITES_CLUSTER_POD_CIDR=10.244.0.0/16 \
+SITES_LOCAL_PATH_PROVISIONER_ENABLED=false \
+scripts/cluster.sh up
 ```
 
 The bootstrap helper generates credentials into a mode-0700 temporary directory and never
-writes them into the repository or a values file. **Do not use it for production** — see
+writes them into the repository or a values file. **Do not use it for production.** For
+the lower-level Helm lifecycle and production Secret contract, see
 [docs/STANDALONE.md](docs/STANDALONE.md) and
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#standalone-helm-installation).
-
-Then point the CLI at it and ask the control plane what it can do, rather than memorizing
-limits that change with the deployed version:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#standalone-helm-installation). Point the CLI at
+the forwarded API and ask the deployed control plane what it can do rather than
+memorizing limits that change with a release:
 
 ```bash
 export SITES_URL=http://127.0.0.1:18091   # the client default
@@ -377,10 +440,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for review expectations and the PR checkl
 
 ## Project
 
-This repository was split out of the `sites/` history of `hullwork/agent`. It now owns its
-Python package, CLI and MCP server, control-plane image, console, Helm chart, and tests.
-Consumers integrate through the HTTP, MCP, package, and chart contracts; neither `agent` nor
-any infrastructure repository is a build or runtime prerequisite.
+Site is an independent open-source project. This repository owns its Python package, CLI
+and MCP server, control-plane image, console, Helm chart, kubeadm trial environment, and
+tests. Consumers integrate only through the documented HTTP, MCP, package, and chart
+contracts; no sibling repository is a build or runtime prerequisite.
 
 - Support and questions: [SUPPORT.md](SUPPORT.md)
 - Community expectations: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)

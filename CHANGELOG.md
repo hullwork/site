@@ -8,6 +8,10 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- A one-command, repository-owned kubeadm quickstart on a disposable Lima VM.
+  It builds the control image from the checkout, installs a pinned Cilium release,
+  Site, and Prometheus, deploys the included static example, and fails unless HTTP
+  verification, persisted admin evidence, and observability are all available.
 - A remote MCP endpoint at `POST /mcp` (stateless Streamable HTTP) on the control-plane
   API, so an agent host reaches the tool surface over the network as an external tenant
   instead of running the stdio server from a copy of this repository's source. It carries
@@ -65,6 +69,11 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- Administrative deployment snapshots now persist `status.verification` and the
+  submitted artifact SHA-256, so the console shows the same measured evidence as the
+  tenant deployment API. Existing rows are backfilled by the next snapshot sweep.
+- The chart's build-registry pull address is a normal Helm value, and releases no
+  longer carry an external composition descriptor or project-specific skill installer.
 - **Breaking: every MCP tool lost its `sites_` self-prefix.** `sites_deploy_static` is
   now `deploy_static`, `sites_list` is `list`, and so on for all seventeen. MCP already
   namespaces tools by server and clients prefix them again, so the old names reached a

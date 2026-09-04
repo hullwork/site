@@ -137,6 +137,19 @@
         }
       }
     },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pullHost"
+      ],
+      "properties": {
+        "pullHost": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
     "existingSecrets": {
       "type": "object",
       "additionalProperties": false,

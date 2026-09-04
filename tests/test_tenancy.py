@@ -1000,8 +1000,8 @@ class SchemaVersioningPostgresDialectTests(unittest.TestCase):
             for sql, params in cursor.statements
             if sql.startswith("INSERT INTO sites_schema_migrations")
         ]
-        self.assertEqual(len(records), 6, cursor.statements)
-        self.assertEqual([record[1][0] for record in records], [1, 2, 3, 4, 5, 6])
+        self.assertEqual(len(records), 7, cursor.statements)
+        self.assertEqual([record[1][0] for record in records], [1, 2, 3, 4, 5, 6, 7])
         self.assertIn("ON CONFLICT (version) DO NOTHING", records[0][0])
         # The steps of v1 were actually executed before the version record was written.
         self.assertIn("CREATE TABLE IF NOT EXISTS sites_merchants", joined)
@@ -1012,7 +1012,7 @@ class SchemaVersioningPostgresDialectTests(unittest.TestCase):
 
     def test_an_applied_version_is_not_replayed_on_postgres(self) -> None:
         cursor = _RecordingCursor(
-            {}, tables=("sites_schema_migrations",), versions=(1, 2, 3, 4, 5, 6)
+            {}, tables=("sites_schema_migrations",), versions=(1, 2, 3, 4, 5, 6, 7)
         )
         self._migrate(cursor)
         joined = "\n".join(sql for sql, _ in cursor.statements)
@@ -1103,7 +1103,7 @@ class PostgresMigrationTests(unittest.TestCase):
         from sites.storage import DatabaseConfig
 
         parts = self.psycopg.conninfo.conninfo_to_dict(_PG_DSN)
-        return Store.postgres(
+        store = Store.postgres(
             DatabaseConfig(
                 host=parts.get("host", "127.0.0.1"),
                 port=int(parts.get("port", 5432)),
@@ -1116,6 +1116,8 @@ class PostgresMigrationTests(unittest.TestCase):
                 sslmode=parts.get("sslmode", "require"),
             )
         )
+        self.addCleanup(store.close)
+        return store
 
     def _query(self, sql: str) -> list[tuple]:
         with self.psycopg.connect(_PG_DSN, autocommit=True) as connection:

@@ -47,6 +47,8 @@ const merchants: MerchantView[] = [
     deploymentCount: 4,
     createdAt: iso(60 * 24 * 30),
     disabledAt: null,
+    keyExpiresAt: iso(-60 * 24 * 20),
+    mayActAsSubjects: true,
     // The server always echoes this field; if the mock lacks it, the frontend will respond to a response that is more accurate than the real response.
     // The "loose" shape is developed, and the difference is only exposed when the back end is connected.
     tenantQuota: { cpu: "4", memory: "4Gi", pods: "16" },
@@ -61,6 +63,8 @@ const merchants: MerchantView[] = [
     deploymentCount: 2,
     createdAt: iso(60 * 24 * 3),
     disabledAt: null,
+    keyExpiresAt: iso(-60 * 24 * 3),
+    mayActAsSubjects: false,
     // The server always echoes this field; if the mock lacks it, the frontend will respond to a response that is more accurate than the real response.
     // The "loose" shape is developed, and the difference is only exposed when the back end is connected.
     tenantQuota: { cpu: "4", memory: "4Gi", pods: "16" },
@@ -74,6 +78,8 @@ const merchants: MerchantView[] = [
     deploymentCount: 0,
     createdAt: iso(60 * 26),
     disabledAt: iso(90),
+    keyExpiresAt: iso(60),
+    mayActAsSubjects: false,
     // The server always echoes this field; if the mock lacks it, the frontend will respond to a response that is more accurate than the real response.
     // The "loose" shape is developed, and the difference is only exposed when the back end is connected.
     tenantQuota: { cpu: "4", memory: "4Gi", pods: "16" },
@@ -350,7 +356,7 @@ function mockMetrics(scope: "cluster" | "application", range: MetricsRange): Mon
   }
   return {
     scope, range: { key: range, start, end, stepSeconds: step },
-    source: { available: true, sampledAt: new Date().toISOString(), retention: "24h" },
+    source: { available: true, sampledAt: new Date().toISOString(), retention: "24h", trafficAvailable: true },
     identity: scope === "application" ? { merchantId: "local", userId: "local", serviceName: "portfolio" } : null,
     summary,
     series,
@@ -514,6 +520,51 @@ export const mockApi: SitesAdminApi = {
       count: rows.length,
       snapshotAgeSeconds: 2.3,
     });
+  },
+
+  async createDeployment(input) {
+    requireMerchant(input.merchantId);
+    requireTenant(input.merchantId, input.userId);
+    const existing = deployments.find((item) =>
+      item.merchantId === input.merchantId
+      && item.userId === input.userId
+      && item.serviceName === input.name);
+    const row: AdminDeploymentView = {
+      ...(existing ?? {}),
+      name: existing?.name ?? `${input.merchantId}-${input.userId}-${input.name}-mock`,
+      merchantId: input.merchantId,
+      userId: input.userId,
+      serviceName: input.name,
+      image: input.image,
+      port: input.port,
+      healthPath: input.healthPath,
+      exposure: input.exposure,
+      memoryLimit: input.memoryLimit ?? "512Mi",
+      phase: "Pending",
+      ready: false,
+      runtimeState: "Unknown",
+      message: "Accepted by sites-api",
+      url: null,
+      updatedAt: new Date().toISOString(),
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+    };
+    if (existing) Object.assign(existing, row);
+    else deployments.unshift(row);
+    return delay(row);
+  },
+
+  async deleteDeployment(merchantId, userId, serviceName) {
+    const found = deployments.find((item) =>
+      item.merchantId === merchantId
+      && item.userId === userId
+      && item.serviceName === serviceName);
+    if (found) {
+      found.phase = "Deleting";
+      found.ready = false;
+      found.message = "Deletion requested through sites-api";
+      found.updatedAt = new Date().toISOString();
+    }
+    await delay(null);
   },
 
   listBuilds(merchantId) {

@@ -182,8 +182,8 @@ DATABASE_ENV_KEYS = (
 STATIC_ARTIFACT_AUTH_MOUNT = "/var/run/sites-oss"
 STATIC_ARTIFACT_DOWNLOADER_IMAGE = getenv(
     "SITES_STATIC_ARTIFACT_DOWNLOADER_IMAGE",
-    "registry.convee.local:5000/sites-control:local",
-) or "registry.convee.local:5000/sites-control:local"
+    "ghcr.io/hullwork/site-control:v0.1.0",
+) or "ghcr.io/hullwork/site-control:v0.1.0"
 STATIC_ARTIFACT_CONTROL_SECRET = getenv(
     "SITES_STATIC_ARTIFACT_CONTROL_SECRET", "sites-oss-auth"
 ) or "sites-oss-auth"

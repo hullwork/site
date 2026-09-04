@@ -9,7 +9,7 @@ Requirements:
 - Python 3.12+
 - [uv](https://docs.astral-sh/uv/)
 - Docker for PostgreSQL-backed tests
-- Helm and kubectl for optional standalone cluster checks
+- Helm, kubectl, and Lima for the optional kubeadm trial
 - Node.js 22 and npm for console changes
 
 ```bash
@@ -36,23 +36,26 @@ Container manifest syntax:
 docker build --check .
 ```
 
-For a self-contained cluster with a current kubectl context:
+For the disposable, self-contained kubeadm trial:
 
 ```bash
-make standalone-install
-make standalone-smoke
-make standalone-uninstall
+make quickstart
+make quickstart-status
+make quickstart-access
+make quickstart-token
+make quickstart-clean
 ```
 
-The uninstall target preserves the namespace, generated development Secrets, and PVCs.
-Delete them separately only when you intend to destroy that local environment.
+The clean target deletes only the `site-quickstart` Lima VM and repository-local
+kubeconfig. For an existing cluster, use the lower-level lifecycle documented in
+[`docs/STANDALONE.md`](docs/STANDALONE.md).
 
 ## Change expectations
 
 - Preserve tenant isolation, quota enforcement, fail-closed exposure policy, and the `status.verification` evidence contract.
 - Expose capability and quota changes through `/v1/capabilities`; CLI and MCP must derive behavior from that response instead of maintaining a second list.
 - Add regression coverage for API, admission, tenancy, reconciliation, exposure, or contract changes.
-- Keep source independent of the agent checkout. agent owns only its consumer wiring, not this repository's package, image, or manifests.
+- Keep the source buildable, testable, releasable, and runnable without another repository.
 - Do not commit `.env` files, tokens, kubeconfigs, private registry credentials, generated console artifacts, or local cluster state.
 - User-visible behavior or deployment changes require README, agent-contract, and deployment-guide updates in the same pull request.
 

@@ -1,15 +1,37 @@
 # Standalone Helm lifecycle
 
-This path installs site into the Kubernetes context selected by `kubectl`.
-It does not require infra, agent, or their CI/CD pipelines. Review the
-current context before continuing:
+For a first source-checkout trial, use the disposable kubeadm workflow from the repository
+root:
+
+```bash
+make quickstart
+make quickstart-access   # terminal 1: opens and serves the console
+make quickstart-token    # terminal 2: paste into the Admin token field
+make quickstart-clean    # deletes only the site-quickstart Lima VM and local state
+```
+
+That path creates a single-node Lima VM, installs Kubernetes 1.36 with kubeadm, installs
+a pinned Cilium release, and builds the control image locally. The Helm release supplies
+its own local storage provisioner, enables Prometheus, deploys `examples/hello-site`, and
+gates success on the deployment's HTTP status/body digest, a host-openable public URL with
+the same body digest, plus the admin metrics and deployment-snapshot APIs. It needs no
+pre-created Lima network, external image, or other repository. After login, the included
+application appears under **Applications** as
+`local/local/hello-site`, including an **Open** action; use **Monitor → Single application**
+for its resource samples. **Deploy application** creates or updates from an existing
+container image: public applications receive a browser URL, while internal applications
+are explicitly labeled as having no public URL.
+
+The lower-level path installs Site into the Kubernetes context selected by `kubectl`.
+Review the current context before continuing:
 
 ```bash
 kubectl config current-context
 helm lint charts/site -f charts/site/values-dev.yaml
 ```
 
-For a disposable development cluster, generate local credentials and install:
+For a cluster whose Pod CIDR and control image have already been configured in the
+selected values, generate local credentials and install:
 
 ```bash
 make standalone-install

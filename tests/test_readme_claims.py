@@ -94,51 +94,5 @@ class ReadmeTestCountTests(unittest.TestCase):
         )
 
 
-class CompositionPointerTests(unittest.TestCase):
-    """The README must keep naming the repository that describes all four.
-
-    This repository documents itself and deliberately does not restate the
-    cross-repository picture; the pointer is the only thing connecting a reader
-    to it. A rename on the other side, or an edit that drops the paragraph,
-    would otherwise leave that reader with nothing and produce no signal here.
-
-    IMPORTANT: this checks a literal in this repository's own README and
-    nothing else. It cannot tell whether the link resolves, whether the target
-    repository exists, or whether it is public - none of that is observable
-    from inside this tree, and a gate that implied otherwise would be worse
-    than no gate. Cross-repository link health needs a check that can actually
-    reach the other side.
-    """
-
-    #: Both forms are asserted: a rename changes the slug, a reader clicks the
-    #: URL, and dropping either is a defect.
-    #:
-    #: Each carries its own terminator on purpose. A bare substring stays green
-    #: through the rename that matters most - "hullwork/platform-composition-v2"
-    #: contains "hullwork/platform-composition" - which is the same shape as an
-    #: unanchored pattern matching inside a longer word. The backticks and the
-    #: closing parenthesis are the anchors; the suffix-rename mutation in the
-    #: pull request is what shows they hold.
-    SLUG = "`hullwork/platform-composition`"
-    URL = "](https://github.com/hullwork/platform-composition)"
-
-    def setUp(self) -> None:
-        self.text = README.read_text(encoding="utf-8")
-
-    def test_readme_names_the_composition_repository(self) -> None:
-        self.assertIn(
-            self.SLUG, self.text,
-            f"README.md no longer names {self.SLUG}. If that repository was "
-            "renamed, update this constant and the README together; if the "
-            "paragraph was deleted, put it back.",
-        )
-
-    def test_readme_links_the_composition_repository(self) -> None:
-        self.assertIn(
-            self.URL, self.text,
-            f"README.md names {self.SLUG} but no longer links {self.URL}.",
-        )
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -82,15 +82,16 @@ export default function MonitoringView({ onError }: { onError: (cause: unknown) 
 
     {error ? <div className="banner banner-bad" role="alert"><Activity size={18} /><div><strong>{t("Metrics refresh failed")}</strong><p>{t("{error}. Charts retain the last successful data.", { error })}</p></div></div> : null}
     {data && !data.source.available ? <div className="banner banner-warn" role="status"><Activity size={18} /><div><strong>{t("The metric backend is temporarily unavailable")}</strong><p>{t("Prometheus is not ready or accessible, and the console does not replace real samples with imputed values.")}</p></div></div> : null}
+    {data?.source.available && data.source.trafficAvailable === false ? <div className="banner banner-warn" role="status"><Activity size={18} /><div><strong>{t("Traffic metrics are unavailable in NodePort mode")}</strong><p>{t("CPU and memory are real Prometheus samples. Request rate, error rate, and latency require the Gateway exposure backend, so they are shown as unavailable instead of zero.")}</p></div></div> : null}
 
     {loading && !data ? <div className="state page-loading"><LoaderCircle className="spin" size={22} /><strong>{t("Reading metrics")}</strong></div> : scope === "application" && !selectedDeployment ? <EmptyState icon={<Boxes size={22} />} title={t("There are no apps to monitor yet")} description={t("Once you create your application, you can view its resources, requests, error rates, and latency trends.")} /> : <>
       <section className="metric-grid metric-grid-four" aria-label={t("Current metric")}>
         <MetricCard label={t("CPU")} value={formatMetric(summary.cpu, "cores", t)} hint={scope === "cluster" ? `${t("Capacity")} ${formatMetric(summary.cpuCapacity, "cores", t)}` : selectedDeployment?.serviceName ?? t("Application")} icon={<Cpu size={19} />} />
         <MetricCard label={t("Memory")} value={formatMetric(summary.memory, "bytes", t)} hint={scope === "cluster" ? `${t("Capacity")} ${formatMetric(summary.memoryCapacity, "bytes", t)}` : t("Working set")} icon={<MemoryStick size={19} />} />
-        <MetricCard label={t("Request rate")} value={formatMetric(summary.requests, "req/s", t)} hint={t("Envoy has completed the request")} icon={<Activity size={19} />} />
-        <MetricCard label={t("P95 response")} value={formatMetric(summary.latencyP95, "ms", t)} hint={`${t("Error rate")} ${formatMetric(summary.errors, "percent", t)}`} icon={<Gauge size={19} />} />
+        <MetricCard label={t("Request rate")} value={data?.source.trafficAvailable === false ? "—" : formatMetric(summary.requests, "req/s", t)} hint={data?.source.trafficAvailable === false ? t("Requires Gateway exposure") : t("Requests completed by Envoy")} icon={<Activity size={19} />} />
+        <MetricCard label={t("P95 response")} value={data?.source.trafficAvailable === false ? "—" : formatMetric(summary.latencyP95, "ms", t)} hint={data?.source.trafficAvailable === false ? t("Error rate is unavailable too") : `${t("Error rate")} ${formatMetric(summary.errors, "percent", t)}`} icon={<Gauge size={19} />} />
       </section>
-      <section className="monitor-grid" aria-label={t("Metric trend")}>{data?.series.filter((series) => !series.id.endsWith("Capacity")).map((series) => <MetricChart key={series.id} series={series} />)}</section>
+      <section className="monitor-grid" aria-label={t("Metric trend")}>{data?.series.filter((series) => !series.id.endsWith("Capacity") && (data.source.trafficAvailable !== false || !["requests", "errors", "latencyP95"].includes(series.id))).map((series) => <MetricChart key={series.id} series={series} />)}</section>
     </>}
 
     {grafana ? <GrafanaPanels grafana={grafana} /> : null}

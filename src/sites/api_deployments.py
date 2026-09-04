@@ -116,12 +116,27 @@ class DeploymentsMixin:
         if identity is None:
             return
         merchant_id, user_id = identity
+        self._post_deployment_for(merchant_id, user_id)
+
+    def _post_deployment_for(
+        self,
+        merchant_id: str,
+        user_id: str,
+        payload: dict | None = None,
+    ) -> None:
+        """Submit one deployment for an already-authorized explicit identity.
+
+        Tenant requests resolve that identity from their credential. The admin
+        console resolves it from validated merchantId/userId fields before
+        calling this helper; keeping the identity as arguments avoids forging
+        impersonation headers or weakening the normal authentication path.
+        """
         quota = self._tenant_quota(merchant_id, user_id)
         if quota is None:
             return
         try:
             desired = site_deployment_resource(
-                self._read_body(),
+                self._read_body() if payload is None else payload,
                 merchant_id,
                 user_id,
                 namespace=CONTROL_NAMESPACE,
@@ -208,6 +223,12 @@ class DeploymentsMixin:
         if identity is None:
             return
         merchant_id, user_id = identity
+        self._delete_deployment_for(raw_name, merchant_id, user_id)
+
+    def _delete_deployment_for(
+        self, raw_name: str, merchant_id: str, user_id: str
+    ) -> None:
+        """Delete the deployment owned by one explicit, authorized identity."""
         try:
             service_name = dns_label(raw_name)
         except ValidationError as exc:
@@ -298,10 +319,8 @@ class DeploymentsMixin:
             # Putting it in front will suppress "Database Unavailable" from 503 to 502.
             self._json(502, {"error": str(exc)})
             return
-        # serviceName is not a decoration: deployment_changed projection of server/agui.py cannot be obtained
-        # It will directly return {} and be ignored by the upstream. The deletion action has been registered but no event will ever be generated - performance
-        # After the agent deletes the site, the Work UI card is not updated, and no errors are reported throughout the process.
-        # Bring the two pieces of identity together so that the caller does not have to go elsewhere to spell the primary key.
+        # Return the complete three-part identity so every caller can update the
+        # exact application row without another lookup.
         self._json(
             202,
             {

@@ -19,9 +19,11 @@ class MonitoringTests(unittest.TestCase):
         ) as query:
             response = monitoring.cluster_metrics("1h")
         self.assertTrue(response["source"]["available"])
+        self.assertFalse(response["source"]["trafficAvailable"])
+        self.assertIn("gateway", response["source"]["trafficReason"])
         self.assertEqual(response["summary"]["cpu"], 2.5)
-        self.assertEqual(len(response["series"]), 7)
-        self.assertEqual(query.call_count, 7)
+        self.assertEqual(len(response["series"]), 4)
+        self.assertEqual(query.call_count, 4)
 
     def test_application_queries_are_scoped_to_derived_namespace_and_service(self) -> None:
         captured: list[str] = []
@@ -46,8 +48,19 @@ class MonitoringTests(unittest.TestCase):
             response = monitoring.cluster_metrics("24h")
         self.assertFalse(response["source"]["available"])
         self.assertEqual(response["source"]["error"], "metrics backend unavailable")
+        self.assertFalse(response["source"]["trafficAvailable"])
         self.assertEqual(response["series"], [])
         self.assertNotIn("secret", str(response))
+
+    def test_gateway_reports_traffic_metrics_as_available(self) -> None:
+        with (
+            patch.dict("os.environ", {"SITES_EXPOSURE_BACKEND": "gateway"}),
+            patch.object(monitoring, "_query_range", return_value=[]),
+        ):
+            response = monitoring.cluster_metrics("1h")
+        self.assertTrue(response["source"]["trafficAvailable"])
+        self.assertIsNone(response["source"]["trafficReason"])
+        self.assertEqual(len(response["series"]), 7)
 
     def test_invalid_range_and_identity_are_rejected_or_sanitized(self) -> None:
         with self.assertRaisesRegex(ValueError, "range"):

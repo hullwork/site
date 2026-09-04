@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#080b0c" />
+    <meta name="description" content="Site is an evidence-backed Kubernetes deployment control plane for AI agents. Deploy over MCP, CLI, HTTP, or console—and prove the result serves traffic." />
+    <meta property="og:title" content="Site — Deploy to Kubernetes. Prove it works." />
+    <meta property="og:description" content="An open-source, agent-native deployment control plane with measured HTTP verification, multi-tenant isolation, and a real operator console." />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://hullwork.github.io/site/" />
+    <meta property="og:image" content="https://hullwork.github.io/site/og.svg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script>document.documentElement.classList.add("js")</script>
+    <link rel="canonical" href="https://hullwork.github.io/site/" />
+    <link rel="icon" href="./mark.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>Site — Deploy to Kubernetes. Prove it works.</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <header class="nav shell">
+      <a class="brand" href="#top" aria-label="Site home">
+        <svg viewBox="0 0 32 32" role="img" aria-hidden="true"><path d="M7 9.5 16 4l9 5.5v13L16 28l-9-5.5v-13Z"/><path d="m11.5 16 3 3 6-7"/></svg>
+        <span>site</span>
+        <small>alpha</small>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#proof">Why Site</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#quickstart">Quickstart</a>
+      </nav>
+      <a class="nav-github" href="https://github.com/hullwork/site" target="_blank" rel="noreferrer">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .8a11.4 11.4 0 0 0-3.6 22.2c.6.1.8-.2.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.6-1.4-1.4-1.8-1.4-1.8-1.1-.8.1-.8.1-.8 1.2.1 1.9 1.3 1.9 1.3 1.1 1.9 2.9 1.4 3.6 1 .1-.8.4-1.4.8-1.7-2.7-.3-5.5-1.3-5.5-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.6.1-3.1 0 0 1-.3 3.1 1.2a10.8 10.8 0 0 1 5.7 0C14.4 5 15.4 5.3 15.4 5.3c.6 1.5.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.8 5.4-5.5 5.7.4.4.8 1.1.8 2.2v3c0 .4.2.7.8.6A11.4 11.4 0 0 0 12 .8Z"/></svg>
+        GitHub
+      </a>
+    </header>
+
+    <main id="main">
+      <section class="hero shell" id="top">
+        <div class="hero-copy reveal">
+          <div class="eyebrow"><span></span> Open source · Kubernetes native · Agent ready</div>
+          <h1>Deploy to Kubernetes.<br /><em>Prove it works.</em></h1>
+          <p class="hero-lead">Site is the deployment control plane built for AI agents and humans who refuse to call a green command “done.” It ships the workload, opens the route, makes a real HTTP request, and records the proof.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#quickstart">Run it locally <span>↗</span></a>
+            <a class="button button-ghost" href="https://github.com/hullwork/site" target="_blank" rel="noreferrer">Explore the source</a>
+          </div>
+          <dl class="hero-stats" aria-label="Project highlights">
+            <div><dt>01</dt><dd>command to a live site</dd></div>
+            <div><dt>1,030</dt><dd>contract tests</dd></div>
+            <div><dt>4</dt><dd>first-class interfaces</dd></div>
+          </dl>
+        </div>
+
+        <div class="hero-visual reveal delay-one" aria-label="Site control plane preview">
+          <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+          <div class="product-window">
+            <div class="window-bar"><span></span><span></span><span></span><b>site / applications</b><small>● live</small></div>
+            <div class="window-body">
+              <aside><strong>S</strong><i></i><i></i><i class="active"></i><i></i></aside>
+              <div class="console">
+                <div class="console-head"><div><small>RUNTIME OPERATIONS</small><h2>Applications</h2></div><button>+ Deploy application</button></div>
+                <div class="metrics"><span><small>ACTIVE</small><b>1</b></span><span><small>FAILED</small><b>0</b></span><span><small>VERIFIED</small><b>1</b></span></div>
+                <div class="app-row">
+                  <div class="app-icon">▦</div>
+                  <div><strong>hello-site</strong><small>local / local</small></div>
+                  <span class="pill">● RUNNING</span>
+                  <span class="pill proof-pill">✓ HTTP 200</span>
+                  <a href="#quickstart">Open ↗</a>
+                </div>
+                <div class="evidence-line"><span>body SHA-256</span><code>5e7f06f9…12178242</code><b>measured</b></div>
+              </div>
+            </div>
+          </div>
+          <div class="floating-card command-card"><small>AGENT REQUEST</small><code>sites deploy-static ./app</code><span>accepted in 42ms</span></div>
+          <div class="floating-card verified-card"><span>✓</span><div><strong>Traffic verified</strong><small>response body matches</small></div></div>
+        </div>
+      </section>
+
+      <section class="proof-section" id="proof">
+        <div class="shell split">
+          <div class="section-copy reveal">
+            <div class="eyebrow"><span></span> Evidence over optimism</div>
+            <h2>Shipping is not success.<br />A measurement is.</h2>
+            <p>Most deployment tools stop when an API accepts an object. Site follows the result all the way to traffic and persists bounded, inspectable evidence on the resource itself.</p>
+            <ul class="check-list">
+              <li><span>01</span>Real HTTP probe from the control plane</li>
+              <li><span>02</span>Status code and response digest recorded</li>
+              <li><span>03</span>Redirects rejected; only 2xx counts</li>
+            </ul>
+          </div>
+          <div class="code-card reveal delay-one">
+            <div class="code-top"><span>SiteDeployment.status</span><small>verified just now</small></div>
+            <pre><code>{
+  <i>"phase"</i>: <b>"Running"</b>,
+  <i>"ready"</i>: <b>true</b>,
+  <i>"url"</i>: <u>"http://127.0.0.1:18090"</u>,
+  <i>"verification"</i>: {
+    <i>"ok"</i>: <b>true</b>,
+    <i>"httpStatus"</i>: <strong>200</strong>,
+    <i>"bodySha256"</i>: <u>"5e7f06f9…"</u>
+  }
+}</code></pre>
+            <div class="code-foot"><span>✓ desired state converged</span><span>✓ response measured</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="features shell" aria-labelledby="features-title">
+        <div class="section-heading reveal">
+          <div class="eyebrow"><span></span> One serious control plane</div>
+          <h2 id="features-title">Small surface. Hard boundaries.<br />Ridiculous leverage.</h2>
+        </div>
+        <div class="bento">
+          <article class="feature feature-wide reveal">
+            <span class="feature-number">01</span><div><h3>Speak agent</h3><p>MCP, a typed CLI, HTTP API, and an operator console all converge on the same narrow contract. No special backdoor for automation.</p></div>
+            <div class="interface-row"><span>MCP</span><span>CLI</span><span>HTTP</span><span>CONSOLE</span></div>
+          </article>
+          <article class="feature reveal delay-one"><span class="feature-number">02</span><h3>Tenancy you cannot fake</h3><p>Merchant and tenant identity come from credentials—not caller-controlled headers. Namespaces, quotas, and routes are derived from both.</p><div class="lock-art">{ credential } <b>→</b> namespace</div></article>
+          <article class="feature reveal"><span class="feature-number">03</span><h3>Deploy five ways</h3><p>Existing images, flat static files, immutable versioned sites, source builds, and multi-component bundles.</p><div class="stack-art"><i></i><i></i><i></i><i></i><i></i></div></article>
+          <article class="feature feature-dark reveal delay-one"><span class="feature-number">04</span><h3>Sleep without disappearing</h3><p>With Gateway API and KEDA, the activator holds the first request, wakes a zero-replica site, then forwards it.</p><div class="pulse-art"><span></span><b>0 → 1</b><span></span></div></article>
+          <article class="feature feature-wide feature-console reveal"><span class="feature-number">05</span><div><h3>Operate what you shipped</h3><p>Applications, verification, tenants, quotas, builds, images, health, and real Prometheus samples—without giving the browser cluster credentials.</p></div><div class="health-strip"><span>DATABASE <b>HEALTHY</b></span><span>OPERATOR <b>HEALTHY</b></span><span>KUBERNETES <b>HEALTHY</b></span></div></article>
+        </div>
+      </section>
+
+      <section class="architecture" id="architecture">
+        <div class="shell">
+          <div class="section-heading reveal"><div class="eyebrow"><span></span> Architecture</div><h2>The shortest honest path<br />from intent to evidence.</h2></div>
+          <div class="flow reveal delay-one">
+            <div class="flow-node"><small>INTENT</small><strong>Agent or human</strong><span>MCP · CLI · HTTP · Console</span></div>
+            <div class="flow-arrow"><i></i><span>authenticated</span></div>
+            <div class="flow-node accent"><small>CONTROL</small><strong>sites-api</strong><span>admission · quotas · metadata</span></div>
+            <div class="flow-arrow"><i></i><span>desired state</span></div>
+            <div class="flow-node"><small>CONVERGENCE</small><strong>sites-operator</strong><span>build · workload · route</span></div>
+            <div class="flow-arrow"><i></i><span>real request</span></div>
+            <div class="flow-node proof-node"><small>EVIDENCE</small><strong>HTTP 200 ✓</strong><span>status + body digest</span></div>
+          </div>
+          <p class="boundary-note">Site owns deployment convergence. Your cluster, ingress policy, domains, billing, and organizational RBAC stay yours.</p>
+        </div>
+      </section>
+
+      <section class="quickstart shell" id="quickstart">
+        <div class="quick-copy reveal"><div class="eyebrow"><span></span> Kubeadm-first quickstart</div><h2>One command.<br />A real cluster.<br />A live URL.</h2><p>The repository-owned trial creates a disposable Lima VM, bootstraps Kubernetes with kubeadm, installs Cilium and Site, deploys the included app, and refuses to pass without measured HTTP proof.</p><div class="requirements">Lima · Docker · kubectl · Helm · uv · Python 3.12+</div></div>
+        <div class="terminal reveal delay-one">
+          <div class="terminal-top"><div><i></i><i></i><i></i></div><span>site — zsh</span><button type="button" data-copy="# clone-and-run">Copy</button></div>
+          <pre id="clone-and-run"><code><span>$</span> git clone https://github.com/hullwork/site.git
+<span>$</span> cd site
+<span>$</span> make quickstart
+
+<b>Site kubeadm quickstart passed</b>
+  phase: <strong>Running</strong>
+  HTTP verification: <strong>200</strong>
+  public URL: <u>http://127.0.0.1:18090</u>
+  public URL body: <strong>matches verification digest</strong></code></pre>
+          <div class="terminal-status"><span><i></i> kubeadm cluster ready</span><span>proof, not promises</span></div>
+        </div>
+      </section>
+
+      <section class="final-cta shell reveal">
+        <div><div class="eyebrow"><span></span> MIT licensed</div><h2>Your infrastructure.<br />Your proof.</h2><p>Read the architecture, run the full stack locally, and help shape an agent-native deployment primitive that stays understandable.</p></div>
+        <div class="cta-actions"><a class="button button-light" href="https://github.com/hullwork/site" target="_blank" rel="noreferrer">Star on GitHub <span>↗</span></a><a href="https://github.com/hullwork/site/blob/main/CONTRIBUTING.md" target="_blank" rel="noreferrer">Read CONTRIBUTING.md</a></div>
+      </section>
+    </main>
+
+    <footer class="shell"><a class="brand" href="#top"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 9.5 16 4l9 5.5v13L16 28l-9-5.5v-13Z"/><path d="m11.5 16 3 3 6-7"/></svg><span>site</span></a><p>Evidence-backed deployment for Kubernetes.</p><span>Open source under MIT.</span></footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>

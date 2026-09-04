@@ -280,6 +280,8 @@ def deployment_record_response(record: dict[str, Any]) -> dict[str, Any]:
         "deletionRequestedAt": iso_timestamp(
             record.get("deletion_requested_at")
         ),
+        "verification": record.get("verification"),
+        "artifactSha256": record.get("artifact_sha256"),
         "status_url": f"/v1/deployments/{dns_label(service_name)}"
         if service_name
         else None,
