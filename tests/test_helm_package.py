@@ -413,6 +413,38 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn("SITES_HOST_PORT_BASE", adapter)
         self.assertIn("nodePort.hostPortBase", adapter)
 
+    def test_registry_address_follows_the_namespace_it_is_installed_into(self) -> None:
+        """The registry Service address must come from namespaces.control.
+
+        The Service is created in that namespace, but the code defaults pinned
+        it at `sites-registry.sites-local.svc:5000`. Installed anywhere else,
+        builds pushed to a Service that is not there and the control plane
+        resolved digests against the same missing address -- with the Chart
+        rendering cleanly and nothing at any layer naming the namespace.
+        """
+        rendered = subprocess.run(
+            [
+                "helm",
+                "template",
+                "site",
+                str(CHART),
+                *POD_CIDR,
+                "--set-string",
+                "namespaces.control=elsewhere",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn('value: "sites-registry.elsewhere.svc:5000"', rendered)
+        self.assertIn('value: "http://sites-registry.elsewhere.svc:5000"', rendered)
+        self.assertNotIn('value: "sites-registry.sites-local.svc:5000"', rendered)
+        # Both processes reach the registry: the API resolves and deletes
+        # images, the operator runs the build. One of the two carrying it is
+        # the same defect with a smaller blast radius.
+        self.assertEqual(rendered.count("SITES_REGISTRY_PUSH_HOST"), 2)
+        self.assertEqual(rendered.count("SITES_REGISTRY_API"), 2)
+
     def test_default_install_declares_no_host_port_mapping(self) -> None:
         """The Chart must not assume a host forwards anything to the NodePort pool.
 

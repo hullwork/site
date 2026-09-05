@@ -401,7 +401,8 @@ spec:
   policyTypes:
     - Egress
   egress:
-    # The target pushed by buildctl is sites-registry.sites-local.svc:5000, and the service name must be resolved first.
+    # The target pushed by buildctl is the sites-registry Service in
+    # namespaces.control on port 5000, and the service name must be resolved first.
     - to:
         - namespaceSelector:
             matchLabels:

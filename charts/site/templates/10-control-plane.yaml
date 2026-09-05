@@ -336,6 +336,15 @@ spec:
             # It will also be printed out by any env in the same Pod.
             - name: SITES_REGISTRY_USERNAME
               value: sites
+            # The registry Service is created in namespaces.control, so its
+            # address is not a constant. Leaving these to the code defaults
+            # pinned the namespace at sites-local: any other install pushed
+            # builds at, and resolved digests against, a Service that is not
+            # there, and nothing said so.
+            - name: SITES_REGISTRY_PUSH_HOST
+              value: {{ printf "sites-registry.%s.svc:5000" .Values.namespaces.control | quote }}
+            - name: SITES_REGISTRY_API
+              value: {{ printf "http://sites-registry.%s.svc:5000" .Values.namespaces.control | quote }}
             - name: SITES_CONTROL_NAMESPACE
               value: {{ .Values.namespaces.control | quote }}
             - name: SITES_HTTP_PORT
@@ -592,6 +601,15 @@ spec:
             # It will also be printed out by any env in the same Pod.
             - name: SITES_REGISTRY_USERNAME
               value: sites
+            # The registry Service is created in namespaces.control, so its
+            # address is not a constant. Leaving these to the code defaults
+            # pinned the namespace at sites-local: any other install pushed
+            # builds at, and resolved digests against, a Service that is not
+            # there, and nothing said so.
+            - name: SITES_REGISTRY_PUSH_HOST
+              value: {{ printf "sites-registry.%s.svc:5000" .Values.namespaces.control | quote }}
+            - name: SITES_REGISTRY_API
+              value: {{ printf "http://sites-registry.%s.svc:5000" .Values.namespaces.control | quote }}
             - name: SITES_CONTROL_NAMESPACE
               value: {{ .Values.namespaces.control | quote }}
             - name: SITES_PUBLIC_URL_HOST
