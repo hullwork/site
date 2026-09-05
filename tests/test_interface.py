@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import os
 import tempfile
 import threading
@@ -1901,6 +1902,42 @@ class DeploymentIntentBoundaryTests(unittest.TestCase):
         })
         self.assertIn("there is no configured public-route capacity limit", sentence)
         self.assertNotIn("None", sentence)
+
+
+class CliHelpContractTests(unittest.TestCase):
+    """What `--help` promises, since nothing else ever executes it."""
+
+    def test_admin_help_only_names_commands_that_exist(self) -> None:
+        """Help that tells the reader what to run next must name a real command.
+
+        Both `create` descriptions end by saying how to replace a lost
+        credential, and the two groups spell that differently -- merchants use
+        `rotate-key`, tenants use `rotate`. Text like this is never executed, so
+        a wrong name here is only found by someone typing it and getting
+        `invalid choice`.
+        """
+        parser = build_parser()
+        admin = next(
+            action.choices["admin"]
+            for action in parser._subparsers._group_actions
+            if "admin" in action.choices
+        )
+        groups = next(
+            action.choices for action in admin._subparsers._group_actions
+        )
+        for group_name, expected in (("merchants", "rotate-key"), ("tenants", "rotate")):
+            with self.subTest(group=group_name):
+                commands = next(
+                    action.choices
+                    for action in groups[group_name]._subparsers._group_actions
+                )
+                self.assertIn(expected, commands)
+                description = commands["create"].description or ""
+                # Whole tokens, not a substring search: "rotate" is a prefix of
+                # "rotate-token", so `in` would accept the name this group does
+                # not have.
+                named = set(re.findall(r"rotate[a-z-]*", description))
+                self.assertEqual(named, {expected}, description)
 
     def test_silent_flag_defaults_are_stated_in_help(self) -> None:
         """Defaults a caller cannot see must at least be printed.

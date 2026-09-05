@@ -428,7 +428,7 @@ def _add_admin_commands(sub: argparse._SubParsersAction) -> None:
     merchant_create = merchants_sub.add_parser(
         "create",
         help="create a merchant and print its API key once",
-        description="The apiKey plaintext is only returned this time, and only the summary is stored in the library; if it is lost, you can only rotate-key.",
+        description="The plaintext API key is returned only this time; the control plane stores only its digest. A lost key can only be replaced with rotate-key.",
     )
     merchant_create.add_argument("merchant_id")
     merchant_create.add_argument("--display-name", required=True)
@@ -469,7 +469,7 @@ def _add_admin_commands(sub: argparse._SubParsersAction) -> None:
     tenant_create = tenants_sub.add_parser(
         "create",
         help="create a tenant and print its token once",
-        description="The token plaintext is returned only this time, and only the digest is stored in the library. If it is lost, it can only be rotated.",
+        description="The plaintext token is returned only this time; the control plane stores only its digest. A lost token can only be replaced with rotate.",
     )
     tenant_create.add_argument("name")
     tenant_create.add_argument("--merchant", required=True)
