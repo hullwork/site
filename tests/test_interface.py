@@ -1797,6 +1797,75 @@ class DeployContractTests(unittest.TestCase):
 
 
 class DeploymentIntentBoundaryTests(unittest.TestCase):
+    def test_the_authorization_an_agent_host_must_inject_is_documented(self) -> None:
+        """A host cannot implement an object whose shape is written nowhere.
+
+        Every MCP write tool refuses without `_agent_deployment_authorization`,
+        and the argument is deliberately kept out of `tools/list` so the model
+        never learns it exists. That leaves the document as the only place a
+        host integrator can read it. Following AGENT_CONTRACT's own client
+        configuration, the whole write surface answered
+        `deployment_authorization_required` and the message names nothing to
+        implement.
+
+        Each field is checked against the validator rather than a copy of it, so
+        the table cannot drift away from what is actually enforced.
+        """
+        from sites import mcp as sites_mcp
+
+        contract = (
+            Path(__file__).resolve().parent.parent / "docs" / "AGENT_CONTRACT.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(sites_mcp.DEPLOYMENT_AUTHORIZATION_ARGUMENT, contract)
+        for field in ("version", "runId", "nonce", "expiresAt", "allowInternal"):
+            with self.subTest(field=field):
+                self.assertIn(f"`{field}`", contract)
+
+        valid = {
+            "version": 1,
+            "runId": "run-1",
+            "nonce": "n" * 24,
+            "expiresAt": time.time() + 60,
+        }
+        base = {
+            "deploymentIntent": "publish this and give me the URL",
+            sites_mcp.DEPLOYMENT_AUTHORIZATION_ARGUMENT: valid,
+        }
+        self.assertEqual(
+            sites_mcp._require_deployment_intent(base),
+            "publish this and give me the URL",
+        )
+        # Each documented rule must be the reason a call is refused when broken.
+        for field, broken in (
+            ("version", 2),
+            ("runId", ""),
+            ("nonce", "n" * 23),
+            ("expiresAt", time.time() - 1),
+        ):
+            with self.subTest(broken=field):
+                arguments = dict(base)
+                arguments[sites_mcp.DEPLOYMENT_AUTHORIZATION_ARGUMENT] = {
+                    **valid,
+                    field: broken,
+                }
+                with self.assertRaises(sites_mcp.ValidationError) as caught:
+                    sites_mcp._require_deployment_intent(arguments)
+                self.assertIn("deployment_authorization_required", str(caught.exception))
+        # allowInternal is what the table says it is: absent means internal is refused.
+        with self.assertRaises(sites_mcp.ValidationError):
+            sites_mcp._require_standalone_exposure_authorization(
+                {**base, "exposure": "internal"}
+            )
+        sites_mcp._require_standalone_exposure_authorization(
+            {
+                "exposure": "internal",
+                sites_mcp.DEPLOYMENT_AUTHORIZATION_ARGUMENT: {
+                    **valid,
+                    "allowInternal": True,
+                },
+            }
+        )
+
     def test_preview_only_intent_is_rejected_before_dispatch(self) -> None:
         from sites import mcp as sites_mcp
 

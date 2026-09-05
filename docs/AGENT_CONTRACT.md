@@ -165,6 +165,50 @@ X-Acting-Subject: <HMAC-SHA256(salt, tenantId + "\0" + subjectId)[:16] as 32 low
 See [AUTH.md §4](AUTH.md) for the derivation and `docs/acting-subject-vectors.json` for
 test vectors. The salt belongs to the agent host and never crosses the boundary.
 
+#### The deployment authorization an agent host must inject
+
+The configuration above is enough for every read tool. The six write tools —
+`deploy_static`, `deploy_static_versioned`, `deploy_image`, `deploy_dynamic`,
+`deploy_bundle`, `source_deploy` — additionally refuse with
+`deployment_authorization_required` unless the call carries a reserved
+`_agent_deployment_authorization` argument. It is described above as the calling
+runtime's artifact; this is its shape, because a host cannot implement it otherwise:
+
+```json
+{
+  "_agent_deployment_authorization": {
+    "version": 1,
+    "runId": "the host's identifier for this run",
+    "nonce": "at least 24 characters, unguessable, fresh per run",
+    "expiresAt": 1788632704.0,
+    "allowInternal": false
+  }
+}
+```
+
+| Field | Rule |
+|---|---|
+| `version` | Must be exactly `1`. Anything else is refused, not upgraded. |
+| `runId` | String, 1–128 characters. |
+| `nonce` | String, at least 24 characters. |
+| `expiresAt` | Seconds since the epoch, strictly in the future when the call arrives. |
+| `allowInternal` | Only `true` authorizes `exposure: "internal"`; otherwise that value is refused so a model cannot quietly turn a request for a public URL into a site with no URL. |
+
+Three rules make it worth having at all, and dropping any one of them turns it back
+into text the model can write for itself:
+
+- The host issues it **from the user's original request**, before the model runs.
+- The host **strips every reserved argument the model supplied** and then injects
+  its own. A model-provided value must never survive.
+- It is deliberately **absent from every `tools/list` schema**, so the model is not
+  told that a field capable of authorizing a deployment exists.
+
+It authorizes nothing on the Sites side: without a valid Sites credential the request
+is refused before this argument is read, and with one it grants no capability the
+credential does not already have. `deploymentIntent` — the verbatim excerpt of the
+user's request — is validated only after the authorization is accepted, because on its
+own it is model-supplied text.
+
 ### stdio MCP (local development and the CLI)
 
 ```json
