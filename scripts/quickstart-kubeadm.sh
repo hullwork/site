@@ -4,6 +4,12 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 action=${1:-up}
 vm=${SITES_QUICKSTART_VM:-site-quickstart}
+worker_count=${SITES_QUICKSTART_WORKERS:-2}
+network=${SITES_QUICKSTART_NETWORK:-${vm}-net}
+network_gateway=${SITES_QUICKSTART_NETWORK_GATEWAY:-192.168.107.1/24}
+worker_cpus=${SITES_QUICKSTART_WORKER_CPUS:-2}
+worker_memory=${SITES_QUICKSTART_WORKER_MEMORY_GIB:-3}
+worker_disk=${SITES_QUICKSTART_WORKER_DISK_GIB:-20}
 api_port=${SITES_QUICKSTART_KUBE_API_PORT:-18447}
 console_port=${SITES_QUICKSTART_CONSOLE_PORT:-18091}
 pod_cidr=${SITES_QUICKSTART_POD_CIDR:-10.201.0.0/16}
@@ -12,29 +18,60 @@ cilium_version=${SITES_QUICKSTART_CILIUM_VERSION:-1.19.6}
 namespace=sites-local
 state_dir="$root/.site-kubeadm"
 kubeconfig="$state_dir/kubeconfig"
+network_marker="$state_dir/network"
+instances_dir="$state_dir/instances"
 image=site-control:quickstart
 context=site-quickstart
 started_at=$SECONDS
 
-[[ "$vm" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || {
-  echo "SITES_QUICKSTART_VM must be a lowercase DNS label" >&2
+[[ "$vm" =~ ^[a-z0-9][a-z0-9-]{0,58}$ ]] || {
+  echo "SITES_QUICKSTART_VM must be a lowercase DNS label of at most 59 characters" >&2
   exit 2
 }
+[[ "$worker_count" =~ ^[1-4]$ ]] || {
+  echo "SITES_QUICKSTART_WORKERS must be an integer from 1 through 4" >&2
+  exit 2
+}
+[[ "$network" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || {
+  echo "SITES_QUICKSTART_NETWORK must be a lowercase DNS label" >&2
+  exit 2
+}
+[[ "$network_gateway" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.1/24$ ]] || {
+  echo "SITES_QUICKSTART_NETWORK_GATEWAY must be an IPv4 /24 gateway ending in .1/24" >&2
+  exit 2
+}
+for resource_value in "$worker_cpus" "$worker_memory" "$worker_disk"; do
+  [[ "$resource_value" =~ ^[1-9][0-9]*$ ]] || {
+    echo "worker CPU, memory, and disk settings must be positive integers" >&2
+    exit 2
+  }
+done
+
+worker_vms=()
+for index in $(seq 1 "$worker_count"); do
+  worker_vms+=("${vm}-w${index}")
+done
+all_worker_vms=()
+for index in $(seq 1 4); do
+  all_worker_vms+=("${vm}-w${index}")
+done
 
 usage() {
   cat <<'EOF'
-Usage: scripts/quickstart-kubeadm.sh <doctor|up|status|access|token|clean>
+Usage: scripts/quickstart-kubeadm.sh <doctor|up|scale|status|access|token|clean>
 
 doctor  Check every host dependency and fixed local port before installation.
-up      Create one disposable Lima VM, bootstrap Kubernetes with kubeadm,
+up      Create one control-plane and two worker Lima VMs, bootstrap Kubernetes with kubeadm,
         build Site from this checkout, deploy the example, and prove it.
+scale   Reconcile the running cluster to SITES_QUICKSTART_WORKERS (1-4, default 2).
 status  Show the node, Site workloads, example, verification, and monitoring.
 access  Forward and open the console at http://127.0.0.1:18091/console/.
 token   Print the disposable trial's local admin token for console login.
-clean   Delete only the site-quickstart VM and this checkout's .site-kubeadm state.
+clean   Delete only the site-quickstart VMs, network, and this checkout's local state.
 
 Prerequisites: Lima, a running Docker daemon, kubectl, Helm, curl, uv, lsof,
-and Python 3.12+; the VM is configured for 6 CPUs, 8 GiB RAM, and a 40 GiB disk.
+and Python 3.12+. The default three-node topology allocates 8 CPUs, 10 GiB RAM,
+and 70 GiB of sparse disk across its VMs.
 No other repository, pre-created Lima network, or published Site image is used.
 EOF
 }
@@ -88,13 +125,16 @@ PY
     fi
   fi
 
-  cat <<'EOF'
+  cat <<EOF
 Quickstart doctor passed
   commands: available
   Python: 3.12 or newer
   Docker daemon: reachable
   local ports: available or owned by this trial
-  VM allocation: 6 CPUs, 8 GiB RAM, 40 GiB sparse disk
+  topology: 1 control-plane + $worker_count workers ($((worker_count + 1)) kubeadm nodes)
+  control-plane allocation: 4 CPUs, 4 GiB RAM, 30 GiB sparse disk
+  worker allocation: ${worker_cpus} CPUs, ${worker_memory} GiB RAM, ${worker_disk} GiB sparse disk each
+  total allocation: $((4 + worker_count * worker_cpus)) CPUs, $((4 + worker_count * worker_memory)) GiB RAM, $((30 + worker_count * worker_disk)) GiB sparse disk
   network: outbound HTTPS is required while Lima, Kubernetes, Cilium, and workload images download
 EOF
 }
@@ -105,6 +145,103 @@ vm_exists() {
 
 vm_running() {
   vm_exists && limactl list "$vm" --format '{{.Status}}' 2>/dev/null | grep -Fxq Running
+}
+
+instance_exists() {
+  limactl list --quiet | grep -Fxq "$1"
+}
+
+instance_owned() {
+  [[ -f "$instances_dir/$1" ]]
+}
+
+mark_instance_owned() {
+  mkdir -p "$instances_dir"
+  : >"$instances_dir/$1"
+}
+
+network_exists() {
+  limactl network list --json 2>/dev/null | NETWORK_NAME="$network" python3 -c '
+import json, os, sys
+name = os.environ["NETWORK_NAME"]
+raise SystemExit(0 if any(json.loads(line).get("name") == name for line in sys.stdin if line.strip()) else 1)
+'
+}
+
+guest_ip() {
+  limactl shell "$1" -- sh -lc \
+    "ip route get 1.1.1.1 | sed -n 's/.* src \\([^ ]*\\).*/\\1/p' | head -1"
+}
+
+ensure_guest_hostname() {
+  local instance=$1
+  if ! limactl shell "$instance" -- getent hosts "$instance" >/dev/null 2>&1; then
+    printf '127.0.1.1 %s\n' "$instance" \
+      | limactl shell "$instance" -- sudo tee -a /etc/hosts >/dev/null
+  fi
+}
+
+create_worker_instance() {
+  local worker=$1
+  if ! instance_exists "$worker"; then
+    echo "      Creating worker VM $worker"
+    limactl create --name="$worker" --tty=false \
+      --cpus="$worker_cpus" --memory="$worker_memory" --disk="$worker_disk" \
+      --network="lima:$network" --set='.portForwards = []' \
+      "$root/dev/kubeadm/lima.yaml"
+    mark_instance_owned "$worker"
+  else
+    instance_owned "$worker" || {
+      echo "Lima VM $worker exists but is not owned by this checkout; choose SITES_QUICKSTART_VM" >&2
+      exit 2
+    }
+    echo "      Reusing worker VM $worker"
+  fi
+  limactl start "$worker" --timeout=15m
+  ensure_guest_hostname "$worker"
+}
+
+join_worker_nodes() {
+  local join_command worker
+  local join_args=()
+  join_command=$(limactl shell "$vm" -- sudo kubeadm token create --ttl=2h --print-join-command)
+  read -r -a join_args <<<"$join_command"
+  for worker in "$@"; do
+    if limactl shell "$worker" -- test -f /etc/kubernetes/kubelet.conf \
+      && kube get node "$worker" >/dev/null 2>&1; then
+      echo "      $worker is already joined"
+    else
+      if limactl shell "$worker" -- test -f /etc/kubernetes/kubelet.conf; then
+        limactl shell "$worker" -- sudo kubeadm reset --force >/dev/null
+      fi
+      limactl shell "$worker" -- sudo ${join_args[@]+"${join_args[@]}"} --node-name="$worker"
+    fi
+    for _ in $(seq 1 60); do
+      kube get node "$worker" >/dev/null 2>&1 && break
+      sleep 1
+    done
+    kube label node "$worker" node-role.kubernetes.io/worker=worker --overwrite >/dev/null
+    kube uncordon "$worker" >/dev/null 2>&1 || true
+  done
+}
+
+verify_node_topology() {
+  kube get nodes -o json | CONTROL_NODE="$vm" EXPECTED_WORKERS="${worker_vms[*]}" python3 -c '
+import json, os, sys
+items = {item["metadata"]["name"]: item for item in json.load(sys.stdin)["items"]}
+control = os.environ["CONTROL_NODE"]
+workers = os.environ["EXPECTED_WORKERS"].split()
+expected = {control, *workers}
+if set(items) != expected:
+    raise SystemExit(f"expected nodes {sorted(expected)}, found {sorted(items)}")
+for name in expected:
+    ready = next((c["status"] for c in items[name]["status"]["conditions"] if c["type"] == "Ready"), None)
+    if ready != "True":
+        raise SystemExit(f"node {name} is not Ready")
+taints = items[control].get("spec", {}).get("taints", [])
+if not any(t.get("key") == "node-role.kubernetes.io/control-plane" and t.get("effect") == "NoSchedule" for t in taints):
+    raise SystemExit("control-plane node must retain its NoSchedule taint")
+'
 }
 
 kube() {
@@ -156,80 +293,232 @@ wait_for_api_forward() {
 }
 
 create_cluster() {
+  local control_ip old_context worker
   mkdir -p "$state_dir"
   chmod 0700 "$state_dir"
+
+  if vm_exists && ! instance_owned "$vm"; then
+    echo "Lima VM $vm exists but is not owned by this checkout; choose SITES_QUICKSTART_VM" >&2
+    exit 2
+  fi
+  for worker in ${worker_vms[@]+"${worker_vms[@]}"}; do
+    if instance_exists "$worker" && ! instance_owned "$worker"; then
+      echo "Lima VM $worker exists but is not owned by this checkout; choose SITES_QUICKSTART_VM" >&2
+      exit 2
+    fi
+  done
+
+  if network_exists; then
+    if [[ ! -f "$network_marker" ]] || [[ "$(cat "$network_marker")" != "$network" ]]; then
+      printf 'Lima network %s already exists but is not owned by this checkout; choose SITES_QUICKSTART_NETWORK\n' "$network" >&2
+      exit 2
+    fi
+    echo "[1/8] Reusing repository-owned Lima network $network"
+  else
+    echo "[1/8] Creating repository-owned Lima user-v2 network $network"
+    limactl network create "$network" --mode=user-v2 --gateway="$network_gateway"
+    printf '%s\n' "$network" >"$network_marker"
+  fi
+
   if ! vm_exists; then
     if lsof -nP -iTCP:"$api_port" -sTCP:LISTEN >/dev/null 2>&1; then
       printf 'host port %s is already in use; set SITES_QUICKSTART_KUBE_API_PORT and update the Lima template forward\n' "$api_port" >&2
       exit 2
     fi
-    echo "[1/7] Creating the disposable Lima VM $vm"
+    echo "      Creating control-plane VM $vm"
     limactl create --name="$vm" --tty=false \
+      --cpus=4 --memory=4 --disk=30 \
+      --network="lima:$network" \
       --set=".portForwards[0].hostPort = $api_port" \
       "$root/dev/kubeadm/lima.yaml"
+    mark_instance_owned "$vm"
   else
-    echo "[1/7] Reusing the repository-owned Lima VM $vm"
+    echo "      Reusing control-plane VM $vm"
   fi
   limactl start "$vm" --timeout=15m
 
-  local guest_ip
-  guest_ip=$(limactl shell "$vm" -- sh -lc \
-    "ip route get 1.1.1.1 | sed -n 's/.* src \\([^ ]*\\).*/\\1/p' | head -1")
-  [[ "$guest_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  for worker in ${worker_vms[@]+"${worker_vms[@]}"}; do
+    create_worker_instance "$worker"
+  done
+
+  control_ip=$(guest_ip "$vm")
+  [[ "$control_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
     echo "could not discover the kubeadm advertise address" >&2
     exit 1
   }
 
   # Lima assigns its final instance hostname after system provisioning. Add it
   # immediately before kubeadm so the preflight check is clean and deterministic.
-  if ! limactl shell "$vm" -- getent hosts "$vm" >/dev/null 2>&1; then
-    printf '127.0.1.1 %s\n' "$vm" \
-      | limactl shell "$vm" -- sudo tee -a /etc/hosts >/dev/null
-  fi
+  ensure_guest_hostname "$vm"
 
   if ! limactl shell "$vm" -- test -f /etc/kubernetes/admin.conf; then
-    echo "[2/7] Bootstrapping Kubernetes with kubeadm"
+    echo "[2/8] Bootstrapping the Kubernetes control plane with kubeadm"
     limactl shell "$vm" -- sudo kubeadm init \
-      --apiserver-advertise-address="$guest_ip" \
+      --apiserver-advertise-address="$control_ip" \
       --pod-network-cidr="$pod_cidr" \
       --service-cidr="$service_cidr" \
       --node-name="$vm"
   else
-    echo "[2/7] kubeadm is already initialized"
+    echo "[2/8] kubeadm control plane is already initialized"
   fi
 
   limactl shell "$vm" -- sudo cat /etc/kubernetes/admin.conf >"$kubeconfig"
   chmod 0600 "$kubeconfig"
   kubectl config --kubeconfig "$kubeconfig" set-cluster kubernetes \
-    --server="https://127.0.0.1:$api_port" --tls-server-name="$guest_ip" >/dev/null
-  local old_context
+    --server="https://127.0.0.1:$api_port" --tls-server-name="$control_ip" >/dev/null
   old_context=$(kubectl config --kubeconfig "$kubeconfig" current-context)
   if [[ "$old_context" != "$context" ]]; then
     kubectl config --kubeconfig "$kubeconfig" rename-context "$old_context" "$context" >/dev/null
   fi
 
-  echo "[3/7] Installing the pinned Cilium pod network"
+  echo "[3/8] Joining $worker_count worker nodes"
+  join_worker_nodes ${worker_vms[@]+"${worker_vms[@]}"}
+
+  echo "[4/8] Installing the pinned Cilium pod network on every node"
   helm upgrade --install cilium oci://quay.io/cilium/charts/cilium \
     --version "$cilium_version" --namespace kube-system \
     --kubeconfig "$kubeconfig" --kube-context "$context" \
     --set routingMode=tunnel --set tunnelProtocol=vxlan \
     --set ipam.mode=kubernetes --set kubeProxyReplacement=false \
     --set operator.replicas=1 --wait --timeout=10m
-  kube taint nodes "$vm" node-role.kubernetes.io/control-plane- >/dev/null 2>&1 || true
-  kube wait --for=condition=Ready "node/$vm" --timeout=5m
+  kube wait --for=condition=Ready nodes --all --timeout=10m
+
+  verify_node_topology
+}
+
+scale_workers() {
+  local desired worker index existing_node result phase verification public_url public_sha proof_sha app_node
+  desired=$worker_count
+  [[ -f "$kubeconfig" ]] || { echo "quickstart is not installed; run make quickstart first" >&2; exit 1; }
+  vm_running || { echo "control-plane VM $vm is not running; run make quickstart first" >&2; exit 1; }
+  [[ -f "$network_marker" ]] && [[ "$(cat "$network_marker")" == "$network" ]] && network_exists || {
+    echo "repository-owned Lima network $network is unavailable; refusing to change nodes" >&2
+    exit 1
+  }
+
+  echo "Scaling Site kubeadm workers to $desired"
+  for worker in ${worker_vms[@]+"${worker_vms[@]}"}; do
+    create_worker_instance "$worker"
+  done
+  join_worker_nodes ${worker_vms[@]+"${worker_vms[@]}"}
+
+  # Every node may receive a control-plane or tenant Pod after a drain. Load the
+  # checkout image before changing placement so a scale operation cannot strand it.
+  docker build -t "$image" "$root"
+  for worker in ${worker_vms[@]+"${worker_vms[@]}"}; do
+    docker save "$image" | limactl shell "$worker" -- sudo ctr -n k8s.io images import - >/dev/null
+  done
+
+  for ((index=4; index>desired; index--)); do
+    worker="${vm}-w${index}"
+    if kube get node "$worker" >/dev/null 2>&1; then
+      echo "      Draining $worker before removal"
+      # Quickstart local volumes are constrained to w1. Refuse removal if that
+      # invariant has been bypassed instead of orphaning a local persistent volume.
+      kube get pv -o json | REMOVE_NODE="$worker" python3 -c '
+import json, os, sys
+node = os.environ["REMOVE_NODE"]
+for pv in json.load(sys.stdin).get("items", []):
+    terms = pv.get("spec", {}).get("nodeAffinity", {}).get("required", {}).get("nodeSelectorTerms", [])
+    for term in terms:
+        for expr in term.get("matchExpressions", []):
+            if expr.get("key") == "kubernetes.io/hostname" and node in expr.get("values", []):
+                name = pv.get("metadata", {}).get("name", "<unknown>")
+                raise SystemExit(f"refusing to remove {node}: persistent volume {name} is pinned there")
+'
+      kube drain "$worker" --ignore-daemonsets --delete-emptydir-data --timeout=10m
+      limactl shell "$worker" -- sudo kubeadm reset --force >/dev/null
+      kube delete node "$worker" --wait=true --timeout=2m
+    fi
+    if instance_exists "$worker"; then
+      instance_owned "$worker" || {
+        echo "refusing to delete unowned Lima VM $worker" >&2
+        exit 1
+      }
+      limactl delete --force "$worker"
+      rm -f "$instances_dir/$worker"
+    fi
+  done
+
+  kube wait --for=condition=Ready nodes --all --timeout=10m
+  verify_node_topology
+
+  for deployment in sites-api sites-operator sites-activator sites-registry sites-prometheus; do
+    kube -n "$namespace" rollout status "deployment/$deployment" --timeout=10m
+  done
+  kube -n "$namespace" rollout status statefulset/sites-postgres --timeout=10m
+  for _ in $(seq 1 120); do
+    result=$(kube get sitedeployments.sites.local -A -o json)
+    phase=$(printf '%s' "$result" | python3 -c '
+import json, sys
+items = [item for item in json.load(sys.stdin)["items"] if item["spec"].get("serviceName") == "hello-site"]
+print(items[0].get("status", {}).get("phase", "") if len(items) == 1 else "")
+')
+    verification=$(printf '%s' "$result" | python3 -c '
+import json, sys
+items = [item for item in json.load(sys.stdin)["items"] if item["spec"].get("serviceName") == "hello-site"]
+print(str(items[0].get("status", {}).get("verification", {}).get("ok", False)).lower() if len(items) == 1 else "false")
+')
+    [[ "$phase" == Running && "$verification" == true ]] && break
+    sleep 1
+  done
+  [[ "$phase" == Running && "$verification" == true ]] || {
+    echo "hello-site did not recover after worker scaling" >&2
+    exit 1
+  }
+  public_url=$(printf '%s' "$result" | python3 -c '
+import json, sys
+item = next(item for item in json.load(sys.stdin)["items"] if item["spec"].get("serviceName") == "hello-site")
+print(item["status"]["url"])
+')
+  proof_sha=$(printf '%s' "$result" | python3 -c '
+import json, sys
+item = next(item for item in json.load(sys.stdin)["items"] if item["spec"].get("serviceName") == "hello-site")
+print(item["status"]["verification"]["bodySha256"])
+')
+  public_sha=$(curl --fail --silent --show-error "$public_url" | python3 -c \
+    'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+  [[ "$public_sha" == "$proof_sha" ]] || {
+    echo "hello-site public URL digest changed after worker scaling" >&2
+    exit 1
+  }
+  app_node=$(kube get pods -A -o json | python3 -c '
+import json, sys
+pods = [item for item in json.load(sys.stdin)["items"] if item["metadata"]["name"].startswith("hello-site-") and item.get("status", {}).get("phase") == "Running"]
+if len(pods) != 1:
+    raise SystemExit(f"expected one running hello-site pod, found {len(pods)}")
+print(pods[0]["spec"]["nodeName"])
+')
+  case " ${worker_vms[*]} " in
+    *" $app_node "*) ;;
+    *) echo "hello-site recovered on unexpected node $app_node" >&2; exit 1 ;;
+  esac
+  existing_node=$(kube get nodes --no-headers | awk '$2 == "Ready" {count++} END {print count+0}')
+  cat <<EOF
+Worker scaling passed
+  topology: 1 control-plane + $desired workers ($existing_node Ready)
+  retained storage worker: ${vm}-w1
+  hello-site node: $app_node
+  public URL: $public_url (HTTP body digest verified)
+  control-plane scheduling: protected by NoSchedule taint
+EOF
 }
 
 prove_site() {
-  echo "[4/7] Building Site from this checkout"
+  local node
+  echo "[5/8] Building Site from this checkout and loading it on every node"
   docker build -t "$image" "$root"
-  docker save "$image" | limactl shell "$vm" -- sudo ctr -n k8s.io images import - >/dev/null
+  for node in "$vm" ${worker_vms[@]+"${worker_vms[@]}"}; do
+    docker save "$image" | limactl shell "$node" -- sudo ctr -n k8s.io images import - >/dev/null
+  done
 
-  echo "[5/7] Installing Site and local observability"
+  echo "[6/8] Installing Site and local observability"
   KUBECONFIG="$kubeconfig" \
   SITES_KUBE_CONTEXT="$context" \
   "$root/scripts/standalone.sh" install \
     --set images.control.repository=site-control \
     --set images.control.tag=quickstart \
+    --set "localPathProvisioner.allowedNodeNames[0]=${vm}-w1" \
     --set-value monitoring.enabled=true
   # A truly new node may need several minutes to pull the pinned database,
   # registry, proxy, and Prometheus images. Do not spend the API rollout budget
@@ -251,7 +540,7 @@ prove_site() {
   KUBECONFIG="$kubeconfig" SITES_KUBE_CONTEXT="$context" \
     "$root/scripts/standalone.sh" smoke
 
-  local forward_log forward_pid forward_port api_url token result phase verification sha status_code source public_url public_sha
+  local forward_log forward_pid forward_port api_url token result phase verification sha status_code source public_url public_sha app_node ready_nodes
   forward_log=$(mktemp "${TMPDIR:-/tmp}/site-api-forward.XXXXXX")
   kube -n "$namespace" port-forward service/sites-api :8080 >"$forward_log" 2>&1 &
   forward_pid=$!
@@ -278,7 +567,7 @@ prove_site() {
   token=$(admin_token)
   ensure_demo_tenant "$token" "$api_url"
 
-  echo "[6/7] Deploying the included local/local application and waiting for measured HTTP proof"
+  echo "[7/8] Deploying the included local/local application and waiting for measured HTTP proof"
   SITES_URL="$api_url" SITES_TOKEN="$token" \
     uv run --locked sites deploy-static --name hello-site \
       --directory "$root/examples/hello-site" --exposure public >/dev/null
@@ -313,7 +602,7 @@ prove_site() {
     exit 1
   }
 
-  echo "[7/7] Verifying persisted admin evidence and Prometheus availability"
+  echo "[8/8] Verifying multi-node placement, persisted evidence, and Prometheus"
   for _ in $(seq 1 60); do
     source=$(curl --fail --silent -H "X-Sites-Service-Token: $token" \
       "$api_url/v1/admin/metrics/cluster" | python3 -c \
@@ -332,12 +621,44 @@ if not row or not row.get("verification", {}).get("ok") or not row.get("artifact
     raise SystemExit("admin deployment snapshot is missing persisted proof")
 '
 
+  app_node=$(kube get pods -A -o json | python3 -c '
+import json, sys
+pods = [
+    item for item in json.load(sys.stdin)["items"]
+    if item["metadata"]["name"].startswith("hello-site-")
+    and item.get("status", {}).get("phase") == "Running"
+]
+if len(pods) != 1:
+    raise SystemExit(f"expected one running hello-site pod, found {len(pods)}")
+print(pods[0]["spec"]["nodeName"])
+')
+  case " ${worker_vms[*]} " in
+    *" $app_node "*) ;;
+    *) printf 'hello-site was scheduled on %s instead of a worker node\n' "$app_node" >&2; exit 1 ;;
+  esac
+  kube -n "$namespace" get pods -o json | CONTROL_NODE="$vm" python3 -c '
+import json, os, sys
+control = os.environ["CONTROL_NODE"]
+pods = json.load(sys.stdin)["items"]
+bad = [item["metadata"]["name"] for item in pods if item.get("spec", {}).get("nodeName") == control]
+if bad:
+    raise SystemExit(f"application control workloads escaped onto the control-plane node: {bad}")
+'
+  ready_nodes=$(kube get nodes --no-headers | awk '$2 == "Ready" {count++} END {print count+0}')
+  [[ "$ready_nodes" -eq $((worker_count + 1)) ]] || {
+    printf 'expected %s Ready nodes, found %s\n' "$((worker_count + 1))" "$ready_nodes" >&2
+    exit 1
+  }
+
   cleanup_forward
   trap - EXIT
   cat <<EOF
 
 Site kubeadm quickstart passed
   elapsed: $((SECONDS - started_at))s
+  topology: 1 control-plane + $worker_count workers ($ready_nodes Ready)
+  example node: $app_node
+  control-plane scheduling: protected by NoSchedule taint
   phase: $phase
   HTTP verification: $status_code
   body SHA-256: $sha
@@ -351,14 +672,17 @@ Next:
   terminal 2: make quickstart-token    # paste into "管理员 token / Admin token"
   choose "进入控制台 / Enter the console"
   make quickstart-status
-  make quickstart-clean    # permanently deletes this disposable VM and its applications
+  SITES_QUICKSTART_WORKERS=3 make quickstart-scale  # resize workers in place (1-4)
+  make quickstart-clean    # permanently deletes these disposable VMs and their applications
 EOF
 }
 
 show_status() {
   [[ -f "$kubeconfig" ]] || { echo "quickstart is not installed; run make quickstart" >&2; exit 1; }
   kube get nodes -o wide
-  kube -n "$namespace" get deployment,statefulset,pod,service
+  kube -n "$namespace" get deployment,statefulset,service
+  kube -n "$namespace" get pods -o wide
+  kube get pods -A -o wide | awk 'NR == 1 || $2 ~ /^hello-site-/'
   kube -n "$namespace" get sitedeployments.sites.local \
     -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,HTTP:.status.verification.httpStatus,SHA256:.status.verification.bodySha256'
 }
@@ -411,14 +735,23 @@ show_token() {
 }
 
 clean() {
+  local worker
   require_command limactl
-  if vm_exists; then
+  for worker in ${all_worker_vms[@]+"${all_worker_vms[@]}"}; do
+    if instance_exists "$worker" && instance_owned "$worker"; then
+      limactl delete --force "$worker"
+    fi
+  done
+  if vm_exists && instance_owned "$vm"; then
     limactl delete --force "$vm"
+  fi
+  if [[ -f "$network_marker" ]] && [[ "$(cat "$network_marker")" == "$network" ]] && network_exists; then
+    limactl network delete --force "$network"
   fi
   if [[ -d "$state_dir" ]]; then
     rm -rf -- "$state_dir"
   fi
-  echo "removed only the $vm Lima VM and $state_dir"
+  echo "removed only the $vm cluster VMs, repository-owned $network network, and $state_dir"
 }
 
 case "$action" in
@@ -427,6 +760,10 @@ case "$action" in
     check_prerequisites
     create_cluster
     prove_site
+    ;;
+  scale)
+    check_prerequisites
+    scale_workers
     ;;
   status) require_command kubectl; show_status ;;
   access) require_command kubectl; access_console ;;

@@ -134,6 +134,13 @@ metadata:
 provisioner: rancher.io/local-path
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete
+{{- with .Values.localPathProvisioner.allowedNodeNames }}
+allowedTopologies:
+  - matchLabelExpressions:
+      - key: kubernetes.io/hostname
+        values:
+{{ toYaml . | indent 10 }}
+{{- end }}
 ---
 kind: ConfigMap
 apiVersion: v1

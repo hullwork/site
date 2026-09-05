@@ -58,6 +58,9 @@ storage:
 
 localPathProvisioner:
   enabled: false
+  # Optional safety boundary for disposable multi-node clusters. All local
+  # volumes bind to one retained worker so other workers can be drained safely.
+  allowedNodeNames: []
 
 postgresql:
   embedded:

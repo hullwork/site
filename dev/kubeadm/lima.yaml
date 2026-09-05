@@ -4,13 +4,14 @@ images:
   - location: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img
     arch: aarch64
 
-cpus: 6
-memory: 8GiB
-disk: 40GiB
+# Control-plane defaults. The quickstart overrides these for worker VMs.
+cpus: 4
+memory: 4GiB
+disk: 30GiB
 
-# The host talks to the API only through this repository-owned forward. The VM
-# uses Lima's default network, so it does not require a pre-created network or
-# configuration from another project.
+# The host talks to the API only through this repository-owned forward. The
+# quickstart attaches every VM to a user-v2 network that it creates and owns;
+# no pre-created network or configuration from another project is required.
 portForwards:
   - guestPort: 6443
     hostPort: 18447

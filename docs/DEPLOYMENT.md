@@ -66,13 +66,15 @@ workflow, plus a separate `site-values-VERSION.yaml` digest-pinned override and
 
 Prerequisites for the complete local trial: Lima, a running Docker daemon, kubectl, Helm,
 curl, uv, lsof, and Python 3.12+. Run `make quickstart-doctor` for the executable preflight.
-The VM allocates 6 CPUs, 8 GiB RAM, and a 40 GiB sparse disk; outbound HTTPS and host
-ports 18090–18098 plus 18447 are required. The repository creates one disposable VM and
-bootstraps Kubernetes with kubeadm; it does not use a shared cluster or another checkout.
+The default three VMs allocate 8 CPUs, 10 GiB RAM, and 70 GiB of sparse disk in total;
+outbound HTTPS and host ports 18090–18098 plus 18447 are required. The repository creates
+one control-plane and two worker VMs on its own Lima network and bootstraps Kubernetes with
+kubeadm; it does not use a shared cluster or another checkout.
 
 ```bash
 make quickstart-doctor
 make quickstart
+SITES_QUICKSTART_WORKERS=3 make quickstart-scale  # supported range: 1-4 workers
 make quickstart-status
 make quickstart-access
 make quickstart-token     # run in a second terminal, then log in
@@ -80,12 +82,14 @@ make quickstart-clean
 ```
 
 `make quickstart` exits after verification. `make quickstart-access` must remain running
-while the console is in use; Ctrl-C stops only that tunnel. `make quickstart-clean`
-permanently removes the disposable VM and all applications stored inside it.
+while the console is in use; Ctrl-C stops only that tunnel. Worker scale-down drains nodes
+and retains `w1`, where quickstart constrains local persistent volumes. It refuses to
+remove a worker carrying an unexpected local volume. `make quickstart-clean` permanently
+removes the disposable VMs, their repository-owned network, and all applications inside.
 
-The quickstart uses a single node to minimize first-run time. Production cluster
-provisioning, upgrades, backup, and disaster recovery are deliberately not
-implemented in this repository.
+The quickstart is a multi-node functional topology with one control-plane, not a highly
+available production cluster. Production provisioning, control-plane HA, upgrades, backup,
+and disaster recovery are deliberately not implemented in this repository.
 
 The chart defaults deploy the core API, operator, PostgreSQL, registry, build
 plane, and console on the NodePort backend. Gateway routing and scale-to-zero

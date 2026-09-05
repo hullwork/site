@@ -6,20 +6,22 @@ root:
 ```bash
 make quickstart-doctor  # checks commands, Docker, Python, and fixed host ports
 make quickstart
+SITES_QUICKSTART_WORKERS=3 make quickstart-scale  # optional: resize to 1-4 workers
 make quickstart-access   # terminal 1: opens and serves the console
 make quickstart-token    # terminal 2: paste into 管理员 token / Admin token
-make quickstart-clean    # deletes only the site-quickstart Lima VM and local state
+make quickstart-clean    # deletes only the Site trial VMs, network, and local state
 ```
 
-The trial VM is configured for 6 CPUs, 8 GiB RAM, and a 40 GiB sparse disk. It needs
+The default three VMs allocate 8 CPUs, 10 GiB RAM, and 70 GiB of sparse disk in total. They need
 outbound HTTPS while the Ubuntu, Kubernetes, Cilium, and workload images download, plus
-host ports 18090–18098 and 18447. A first uncached install may take 5–25 minutes.
+host ports 18090–18098 and 18447. A first uncached install may take 8–30 minutes.
 `make quickstart` exits after printing the proof. Keep `make quickstart-access` running;
 pressing Ctrl-C there closes only the console tunnel, not the cluster. In the default
 Chinese UI choose **进入控制台**; in English choose **Enter the console**.
 
-That path creates a single-node Lima VM, installs Kubernetes 1.36 with kubeadm, installs
-a pinned Cilium release, and builds the control image locally. The Helm release supplies
+That path creates one control-plane and two worker Lima VMs, installs Kubernetes 1.36 with
+kubeadm, joins the workers, installs a pinned Cilium release, and builds the control image
+locally. The Helm release supplies
 its own local storage provisioner, enables Prometheus, deploys `examples/hello-site`, and
 gates success on the deployment's HTTP status/body digest, a host-openable public URL with
 the same body digest, plus the admin metrics and deployment-snapshot APIs. It needs no
@@ -30,8 +32,15 @@ for its resource samples. **Deploy application** creates or updates from an exis
 container image: public applications receive a browser URL, while internal applications
 are explicitly labeled as having no public URL.
 
+`SITES_QUICKSTART_WORKERS=N make quickstart-scale` reconciles the live trial to one through
+four workers. Scale-down drains the highest-numbered workers first. All local persistent
+volumes are constrained to worker `w1`, which is retained; the command refuses removal if
+it detects a local volume on a candidate node. This only scales workers: one control-plane
+is not an HA topology.
+
 `make quickstart-clean` is intentionally destructive only to the disposable trial: it
-deletes that VM, every application inside it, and this checkout's local kubeconfig.
+deletes its VMs, repository-owned Lima network, every application inside it, and this
+checkout's local kubeconfig.
 
 The lower-level path installs Site into the Kubernetes context selected by `kubectl`.
 Review the current context before continuing:
