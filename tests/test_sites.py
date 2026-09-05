@@ -1283,6 +1283,58 @@ class CommonTests(unittest.TestCase):
                 )
                 seen[name] = spec_path.name
 
+    def test_stale_evidence_stays_and_is_distinguishable_by_revision(self) -> None:
+        """A failed rollout keeps the previous revision's passing evidence.
+
+        That retention is deliberate -- it is still true that the earlier
+        revision served traffic -- but it means a response can read
+        `phase: Failed` and `verification.ok: true` at the same time. Observed
+        live: a dynamic site's version 2 never became ready, and `sites status`
+        answered Failed while carrying version 1's 200 and body digest.
+
+        The only thing separating the two is the revision each names, so both
+        must be in the same response and the contract must say to compare them.
+        Documenting the rule without the fields, or shipping the fields without
+        the rule, leaves the caller reading `ok` alone.
+        """
+        obj = {
+            "metadata": {"name": "local-local-demo-0", "generation": 2},
+            "spec": {
+                "merchantID": DEFAULT_MERCHANT_ID,
+                "userID": "local",
+                "serviceName": "demo",
+                "image": "example.invalid/demo@sha256:" + "b" * 64,
+                "port": 8080,
+                "revision": "200",
+                "exposure": "public",
+            },
+            "status": {
+                "phase": "Failed",
+                "observedGeneration": 2,
+                "message": "Deployment was not ready within 120s",
+                "verification": {
+                    "ok": True,
+                    "httpStatus": 200,
+                    "bodySha256": "c" * 64,
+                    "revision": "100",
+                },
+            },
+        }
+        response = _deployment_response(obj)
+        self.assertEqual(response["phase"], "Failed")
+        self.assertTrue(response["verification"]["ok"])
+        self.assertEqual(response["revision"], "200")
+        self.assertEqual(response["verification"]["revision"], "100")
+        self.assertNotEqual(
+            response["revision"], response["verification"]["revision"]
+        )
+
+        contract = (
+            Path(__file__).resolve().parent.parent / "docs" / "AGENT_CONTRACT.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("verification.revision == revision", contract)
+        self.assertIn("Evidence belongs to the revision it names", contract)
+
     def test_bundle_components_carry_the_verification_evidence(self) -> None:
         """Each component must surface the evidence the operator wrote for it.
 

@@ -175,7 +175,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1043 tests
+make test        # 1047 tests
 make test-db-down
 ```
 
@@ -235,7 +235,12 @@ sites capabilities
   `bodySha256` from a request the control plane made itself. Redirects are not followed and
   only 2xx counts, because those are the two facts a tenant cannot forge. The evidence is
   bounded on purpose: it proves something at that address returned 2xx with that body
-  digest — not that the body is semantically correct, since the tenant produced it.
+  digest — not that the body is semantically correct, since the tenant produced it. It is
+  also bounded in time: the evidence names the `revision` it was collected for and is kept
+  when a later revision fails to roll out, so `ok: true` beside `phase: Failed` is last
+  time's answer, not this one's. Compare `verification.revision` with the deployment's
+  `revision` — [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md#success-criteria) states the
+  full acceptance rule.
 - **The caller cannot name the tenancy it writes into.** Identity is a `(merchant, tenant)`
   pair decided entirely by the credential. `X-Merchant-ID` and `X-User-ID` are **refused
   with 403**, not ignored, so a misconfigured client fails loudly instead of quietly

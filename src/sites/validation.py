@@ -607,8 +607,9 @@ def normalize_deploy_payload(
         if not exposure_backend.backend().supports_scale_to_zero:
             raise ValidationError(
                 "scaleToZero requires L7 gateway (SITES_EXPOSURE_BACKEND=gateway): "
-                "NodePort directly DNATs external traffic to the site Pod. After shrinking to 0, there will be no"
-                "The link can receive the request and trigger the wake-up"
+                "NodePort DNATs external traffic straight to the site Pod, so once it "
+                "scales to 0 there is no hop left to receive the request and trigger "
+                "the wake-up"
             )
         # Only write spec when true, the same as nodePort: the shape of the existing CR is not affected,
         # On the reading side, spec.get("scaleToZero") is used to judge.

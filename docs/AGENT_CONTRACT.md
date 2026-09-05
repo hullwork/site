@@ -50,6 +50,22 @@ completed real HTTP evidence collection. The result also records `httpStatus` an
 `bodySha256`. The public or host entry point is a separate network path: request the
 returned URL from the user side and compare its response digest with `bodySha256`.
 
+**Evidence belongs to the revision it names.** `verification.revision` is the revision the
+probe ran against, and it is deliberately kept when a later revision fails to roll out —
+it remains true that *that* revision served traffic. So `ok=true` next to
+`phase: Failed` is not a contradiction and is not success: it is last time's answer. A
+caller that reads `ok` alone will report a rollout that never came up as a live site.
+Accept a deployment only when **all** of these hold:
+
+```
+phase == "Running"  and  ready == true
+  and verification.ok == true
+  and verification.revision == revision      # the top-level revision of the same response
+```
+
+Both fields are in every `sites status` and `GET /v1/deployments/{name}` response, so the
+comparison needs no extra call.
+
 ## Identity
 
 **[AUTH.md](AUTH.md) is the contract.** It is written for any client,
