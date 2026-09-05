@@ -12,6 +12,10 @@ worker_memory=${SITES_QUICKSTART_WORKER_MEMORY_GIB:-3}
 worker_disk=${SITES_QUICKSTART_WORKER_DISK_GIB:-20}
 api_port=${SITES_QUICKSTART_KUBE_API_PORT:-18447}
 console_port=${SITES_QUICKSTART_CONSOLE_PORT:-18091}
+# Host port this trial's relay maps NODE_PORT_MIN to. It is the trial harness
+# that owns the mapping -- Lima forwards guest 30080..30088 here -- so the trial
+# is what declares it to the Chart. Keep aligned with dev/kubeadm/lima.yaml.
+host_port_base=${SITES_QUICKSTART_HOST_PORT_BASE:-18090}
 pod_cidr=${SITES_QUICKSTART_POD_CIDR:-10.201.0.0/16}
 service_cidr=${SITES_QUICKSTART_SERVICE_CIDR:-10.202.0.0/16}
 cilium_version=${SITES_QUICKSTART_CILIUM_VERSION:-1.19.6}
@@ -71,7 +75,7 @@ access  Forward and open the console at http://127.0.0.1:18091/console/.
 token   Print the disposable trial's local admin token for console login.
 clean   Delete only the site-quickstart VMs, network, and this checkout's local state.
 
-Prerequisites: Lima, a running Docker daemon, kubectl, Helm, curl, uv, lsof,
+Prerequisites: Lima, a running Docker daemon, kubectl, Helm, curl, uv,
 and Python 3.12+. The default three-node topology allocates 8 CPUs, 10 GiB RAM,
 and 70 GiB of sparse disk across its VMs.
 No other repository, pre-created Lima network, or published Site image is used.
@@ -85,9 +89,37 @@ require_command() {
   }
 }
 
+# Of the ports given, echo those the host cannot hand to Lima.
+#
+# A bind probe, not a listener listing. `lsof` only reports sockets owned by the
+# user running it, so a port held by root or by another account reads as free and
+# the trial then fails minutes later at the exact forward this check exists to
+# catch. Binding answers the question actually being asked -- can a server take
+# this address -- for any owner. Lima publishes these forwards on 127.0.0.1, so
+# that is the address probed, and SO_REUSEADDR matches what a server would set,
+# keeping a lingering TIME_WAIT socket from reading as a conflict.
+ports_in_use() {
+  python3 - "$@" <<'PY'
+import socket
+import sys
+
+busy = []
+for port in sys.argv[1:]:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        probe.bind(("127.0.0.1", int(port)))
+    except OSError:
+        busy.append(port)
+    finally:
+        probe.close()
+print(" ".join(busy))
+PY
+}
+
 check_prerequisites() {
   local command_name missing=()
-  for command_name in limactl docker kubectl helm curl uv python3 lsof; do
+  for command_name in limactl docker kubectl helm curl uv python3; do
     command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
   done
   if ((${#missing[@]})); then
@@ -111,17 +143,16 @@ PY
     exit 2
   fi
 
-  # These are the complete fixed-port contract of the reference VM. Checking
-  # all of them now avoids a Lima forwarding failure several minutes later.
+  # The complete fixed-port contract of the reference VM: the Kubernetes API
+  # forward plus the nine contiguous host ports starting at host_port_base -- the
+  # NodePort pool, with the console occupying the one Lima does not forward.
+  # Checking all of them now avoids a Lima forwarding failure several minutes
+  # later.
   if ! vm_running; then
-    local port busy=()
-    for port in "$api_port" "$console_port" 18090 18092 18093 18094 18095 18096 18097 18098; do
-      if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-        busy+=("$port")
-      fi
-    done
-    if ((${#busy[@]})); then
-      printf 'quickstart host ports are already in use: %s\n' "${busy[*]}" >&2
+    local busy
+    busy=$(ports_in_use "$api_port" $(seq "$host_port_base" $((host_port_base + 8)))) || exit 2
+    if [[ -n "$busy" ]]; then
+      printf 'quickstart host ports are already in use: %s\n' "$busy" >&2
       echo 'Stop the process or older Site trial using those ports, then rerun make quickstart.' >&2
       exit 2
     fi
@@ -408,7 +439,7 @@ create_cluster() {
   fi
 
   if ! vm_exists; then
-    if lsof -nP -iTCP:"$api_port" -sTCP:LISTEN >/dev/null 2>&1; then
+    if [[ -n "$(ports_in_use "$api_port")" ]]; then
       printf 'host port %s is already in use; set SITES_QUICKSTART_KUBE_API_PORT and update the Lima template forward\n' "$api_port" >&2
       exit 2
     fi
@@ -608,6 +639,7 @@ prove_site() {
     --set images.control.repository=site-control \
     --set images.control.tag=quickstart \
     --set "localPathProvisioner.allowedNodeNames[0]=${vm}-w1" \
+    --set "nodePort.hostPortBase=$host_port_base" \
     --set-value monitoring.enabled=true
   # A truly new node may need several minutes to pull the pinned database,
   # registry, proxy, and Prometheus images. Do not spend the API rollout budget
