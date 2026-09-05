@@ -273,10 +273,14 @@ iptables -t nat -N SITE-NODEPORT-OUTPUT 2>/dev/null || true
 iptables -t nat -N SITE-NODEPORT-SNAT 2>/dev/null || true
 iptables -t nat -F SITE-NODEPORT-OUTPUT
 iptables -t nat -F SITE-NODEPORT-SNAT
-iptables -t nat -C OUTPUT -d 127.0.0.1/32 -j SITE-NODEPORT-OUTPUT 2>/dev/null \
-  || iptables -t nat -I OUTPUT 1 -d 127.0.0.1/32 -j SITE-NODEPORT-OUTPUT
-iptables -t nat -C POSTROUTING -j SITE-NODEPORT-SNAT 2>/dev/null \
-  || iptables -t nat -I POSTROUTING 1 -j SITE-NODEPORT-SNAT
+while iptables -t nat -C OUTPUT -d 127.0.0.1/32 -j SITE-NODEPORT-OUTPUT 2>/dev/null; do
+  iptables -t nat -D OUTPUT -d 127.0.0.1/32 -j SITE-NODEPORT-OUTPUT
+done
+while iptables -t nat -C POSTROUTING -j SITE-NODEPORT-SNAT 2>/dev/null; do
+  iptables -t nat -D POSTROUTING -j SITE-NODEPORT-SNAT
+done
+iptables -t nat -I OUTPUT 1 -d 127.0.0.1/32 -j SITE-NODEPORT-OUTPUT
+iptables -t nat -I POSTROUTING 1 -j SITE-NODEPORT-SNAT
 for port in \$ports; do
   iptables -t nat -A SITE-NODEPORT-OUTPUT -p tcp --dport "\$port" \
     -j DNAT --to-destination "\$worker_ip:\$port"
@@ -294,14 +298,23 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/site-nodeport-relay
-RemainAfterExit=yes
+EOF
+  limactl shell "$vm" -- sudo tee /etc/systemd/system/site-nodeport-relay.timer >/dev/null <<'EOF'
+[Unit]
+Description=Reassert Site quickstart NodePort relay after node-agent rule changes
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=site-nodeport-relay.service
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=timers.target
 EOF
   limactl shell "$vm" -- sudo systemctl daemon-reload
-  limactl shell "$vm" -- sudo systemctl enable site-nodeport-relay.service >/dev/null
   limactl shell "$vm" -- sudo systemctl restart site-nodeport-relay.service
+  limactl shell "$vm" -- sudo systemctl enable --now site-nodeport-relay.timer >/dev/null
 }
 
 kube() {
@@ -349,6 +362,20 @@ wait_for_api_forward() {
     sleep 0.2
   done
   cat "$log" >&2
+  return 1
+}
+
+public_body_sha() {
+  local url=$1 digest
+  for _ in $(seq 1 30); do
+    if digest=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$url" \
+      | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'); then
+      printf '%s\n' "$digest"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "public URL did not return a successful response within the bounded retry window: $url" >&2
   return 1
 }
 
@@ -539,8 +566,7 @@ import json, sys
 item = next(item for item in json.load(sys.stdin)["items"] if item["spec"].get("serviceName") == "hello-site")
 print(item["status"]["verification"]["bodySha256"])
 ')
-  public_sha=$(curl --fail --silent --show-error "$public_url" | python3 -c \
-    'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+  public_sha=$(public_body_sha "$public_url")
   [[ "$public_sha" == "$proof_sha" ]] || {
     echo "hello-site public URL digest changed after worker scaling" >&2
     exit 1
@@ -658,8 +684,7 @@ prove_site() {
     printf 'quickstart did not return a local public URL: %s\n' "$public_url" >&2
     exit 1
   }
-  public_sha=$(curl --fail --silent --show-error "$public_url" | python3 -c \
-    'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+  public_sha=$(public_body_sha "$public_url")
   [[ "$public_sha" == "$sha" ]] || {
     printf 'public URL body digest %s does not match control-plane proof %s\n' "$public_sha" "$sha" >&2
     exit 1
