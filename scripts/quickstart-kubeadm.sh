@@ -244,6 +244,64 @@ if not any(t.get("key") == "node-role.kubernetes.io/control-plane" and t.get("ef
 '
 }
 
+configure_nodeport_relay() {
+  local control_ip worker_ip
+  control_ip=$(guest_ip "$vm")
+  worker_ip=$(guest_ip "${vm}-w1")
+  [[ "$control_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "could not discover the control-plane relay address" >&2
+    exit 1
+  }
+  [[ "$worker_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+    echo "could not discover the retained worker relay address" >&2
+    exit 1
+  }
+
+  # Lima's static host forwards terminate on guest loopback. A loopback source
+  # cannot traverse to a remote NodePort endpoint, so translate the fixed trial
+  # ports to retained worker w1 and SNAT them to the control-plane node address.
+  # The systemd unit reapplies the narrow rules after a VM reboot.
+  limactl shell "$vm" -- sudo tee /usr/local/sbin/site-nodeport-relay >/dev/null <<EOF
+#!/bin/sh
+set -eu
+control_ip=$control_ip
+worker_ip=$worker_ip
+ports='30080 30082 30083 30084 30085 30086 30087 30088'
+iptables -t nat -N SITE-NODEPORT-OUTPUT 2>/dev/null || true
+iptables -t nat -N SITE-NODEPORT-SNAT 2>/dev/null || true
+iptables -t nat -F SITE-NODEPORT-OUTPUT
+iptables -t nat -F SITE-NODEPORT-SNAT
+iptables -t nat -C OUTPUT -d 127.0.0.1/32 -j SITE-NODEPORT-OUTPUT 2>/dev/null \
+  || iptables -t nat -I OUTPUT 1 -d 127.0.0.1/32 -j SITE-NODEPORT-OUTPUT
+iptables -t nat -C POSTROUTING -j SITE-NODEPORT-SNAT 2>/dev/null \
+  || iptables -t nat -I POSTROUTING 1 -j SITE-NODEPORT-SNAT
+for port in \$ports; do
+  iptables -t nat -A SITE-NODEPORT-OUTPUT -p tcp --dport "\$port" \
+    -j DNAT --to-destination "\$worker_ip:\$port"
+  iptables -t nat -A SITE-NODEPORT-SNAT -d "\$worker_ip/32" -p tcp --dport "\$port" \
+    -j SNAT --to-source "\$control_ip"
+done
+EOF
+  limactl shell "$vm" -- sudo chmod 0755 /usr/local/sbin/site-nodeport-relay
+  limactl shell "$vm" -- sudo tee /etc/systemd/system/site-nodeport-relay.service >/dev/null <<'EOF'
+[Unit]
+Description=Site quickstart loopback to worker NodePort relay
+After=network-online.target kubelet.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/site-nodeport-relay
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  limactl shell "$vm" -- sudo systemctl daemon-reload
+  limactl shell "$vm" -- sudo systemctl enable site-nodeport-relay.service >/dev/null
+  limactl shell "$vm" -- sudo systemctl restart site-nodeport-relay.service
+}
+
 kube() {
   kubectl --kubeconfig "$kubeconfig" --context "$context" "$@"
 }
@@ -380,10 +438,12 @@ create_cluster() {
     --kubeconfig "$kubeconfig" --kube-context "$context" \
     --set routingMode=tunnel --set tunnelProtocol=vxlan \
     --set ipam.mode=kubernetes --set kubeProxyReplacement=false \
+    --set policyCIDRMatchMode=nodes \
     --set operator.replicas=1 --wait --timeout=10m
   kube wait --for=condition=Ready nodes --all --timeout=10m
 
   verify_node_topology
+  configure_nodeport_relay
 }
 
 scale_workers() {
@@ -442,6 +502,7 @@ for pv in json.load(sys.stdin).get("items", []):
 
   kube wait --for=condition=Ready nodes --all --timeout=10m
   verify_node_topology
+  configure_nodeport_relay
 
   for deployment in sites-api sites-operator sites-activator sites-registry sites-prometheus; do
     kube -n "$namespace" rollout status "deployment/$deployment" --timeout=10m

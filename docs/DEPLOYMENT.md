@@ -90,6 +90,10 @@ removes the disposable VMs, their repository-owned network, and all applications
 The quickstart is a multi-node functional topology with one control-plane, not a highly
 available production cluster. Production provisioning, control-plane HA, upgrades, backup,
 and disaster recovery are deliberately not implemented in this repository.
+The host-visible application ports terminate on control-plane loopback and pass through a
+repository-managed systemd/iptables relay to retained worker `w1`; kube-proxy and Cilium
+route onward to the selected workload Pod. The relay covers only the documented NodePort
+pool, survives VM reboot, and disappears when the disposable control-plane VM is deleted.
 
 The chart defaults deploy the core API, operator, PostgreSQL, registry, build
 plane, and console on the NodePort backend. Gateway routing and scale-to-zero

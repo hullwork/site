@@ -16,10 +16,12 @@ portForwards:
   - guestPort: 6443
     hostPort: 18447
     static: true
-  # NodePort exposure is the quickstart's public application path. Keep this
-  # mapping aligned with src/sites/exposure.py: 30080, 30082-30088 become
-  # 18090, 18092-18098. 30081 is deliberately excluded and 18091 serves the
-  # admin console through kubectl port-forward instead.
+  # NodePort exposure is the quickstart's public application path. Lima sends
+  # these fixed forwards to guest loopback; quickstart-kubeadm.sh owns a narrow
+  # systemd/iptables relay from loopback to retained worker w1 so the target Pod
+  # may live on any worker. Keep this mapping aligned with src/sites/exposure.py:
+  # 30080, 30082-30088 become 18090, 18092-18098. 30081 is deliberately excluded
+  # and 18091 serves the admin console through kubectl port-forward instead.
   - guestPort: 30080
     hostPort: 18090
     static: true

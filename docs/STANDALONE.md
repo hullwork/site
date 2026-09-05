@@ -40,6 +40,10 @@ is not an HA topology.
 
 The control-plane keeps its kubeadm `NoSchedule` taint. Site, Prometheus, and tenant Pods
 run on workers; the quickstart fails if a Site workload crosses that boundary.
+Lima's fixed host ports terminate on control-plane loopback, so the repository installs a
+narrow systemd/iptables relay for ports 30080 and 30082–30088 to retained worker `w1`.
+Kube-proxy and Cilium then route to the actual application worker. The relay is recreated
+on control-plane reboot and removed with the disposable VM.
 
 `make quickstart-clean` is intentionally destructive only to the disposable trial: it
 deletes its VMs, repository-owned Lima network, every application inside it, and this

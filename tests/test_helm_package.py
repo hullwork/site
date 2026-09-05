@@ -31,6 +31,9 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn('--network="lima:$network"', script)
         self.assertIn("node-role.kubernetes.io/worker=worker", script)
         self.assertIn("control-plane node must retain its NoSchedule taint", script)
+        self.assertIn("policyCIDRMatchMode=nodes", script)
+        self.assertIn("site-nodeport-relay.service", script)
+        self.assertIn("SITE-NODEPORT-SNAT", script)
         self.assertNotIn('node-role.kubernetes.io/control-plane-', script)
         self.assertIn("dev/kubeadm/lima.yaml", script)
 

@@ -117,8 +117,11 @@ applications inside them, the repository-owned Lima network, and the repository-
 kubeconfig; it does not touch another cluster, network, or repository.
 
 This trial harness is entirely owned by this repository: it creates its own Lima user-v2
-network, bootstraps Kubernetes directly with kubeadm, and builds the control image locally. No
-other checkout, shared cluster configuration, or pre-published Site image is required.
+network, bootstraps Kubernetes directly with kubeadm, and builds the control image locally.
+Fixed host ports enter through the control-plane VM; a repository-managed, reboot-persistent
+relay sends only those ports to retained worker `w1`, and Kubernetes routes them to whichever
+worker owns the application Pod. No other checkout, shared cluster configuration, or
+pre-published Site image is required.
 
 ```text
  ┌─ an agent asks for a deployment ────────────────────────────────────────┐
