@@ -175,7 +175,7 @@ and an invalid value generally raises at import time rather than falling back.
 | `SITES_SOURCE_ROOT` | `/var/lib/sites/sources` | Mount path for that PVC |
 | `SITES_OSS_AUTH_SECRET` | `sites-oss-auth` | Secret holding object-storage credentials |
 | `SITES_OSS_AUTH_MOUNT` | `/var/run/sites-oss` | Where that Secret is mounted |
-| `SITES_TENANT_CPU_LIMIT` | `4` | Per-tenant namespace CPU quota |
+| `SITES_TENANT_CPU_LIMIT` | `4` | Per-tenant namespace CPU quota. Each site container is capped at `limits.cpu: 1`, so this is also the number of sites one tenant can run at once — independently of, and by default lower than, the tenant's `maxDeployments`. See [README known limitations](../README.md#known-limitations) |
 | `SITES_TENANT_MEMORY_LIMIT` | `4Gi` | Per-tenant namespace memory quota |
 | `SITES_TENANT_POD_LIMIT` | `16` | Per-tenant namespace Pod quota |
 

@@ -1120,6 +1120,97 @@ class OperatorScaleEventTests(unittest.TestCase):
         self.assertEqual(status["phase"], "Failed")
         self.assertIn("not ready within", status["message"])
 
+    def test_a_stall_that_creates_no_pod_still_names_its_cause(self) -> None:
+        """The one stall with nothing to inspect is the one that must be reported.
+
+        A namespace ResourceQuota refuses the pod at the ReplicaSet, so there is
+        no container state to read and the Available condition says only
+        "Deployment does not have minimum availability". Observed live: the fifth
+        site in a tenant hit `limits.cpu=4` and the caller was told, 120 seconds
+        after a 200, that the workload was not ready -- while the sentence naming
+        the exhausted quota sat unread on the Deployment the operator already had.
+        """
+        from sites.operator import _rollout_stall_reason
+
+        class _NoPods:
+            def get(self, path: str):
+                return {"items": []}
+
+        quota = (
+            'pods "demo-6cf4c7f4df-gjhfn" is forbidden: exceeded quota: '
+            "sites-tenant-quota, requested: limits.cpu=1, used: limits.cpu=4, "
+            "limited: limits.cpu=4"
+        )
+        deployment = {
+            "status": {
+                "conditions": [
+                    {
+                        "type": "Available",
+                        "status": "False",
+                        "message": "Deployment does not have minimum availability.",
+                    },
+                    {
+                        "type": "ReplicaFailure",
+                        "status": "True",
+                        "reason": "FailedCreate",
+                        "message": quota,
+                    },
+                ]
+            }
+        }
+        reason = _rollout_stall_reason(_NoPods(), deployment, "ns-a", "demo")
+        self.assertIn("exceeded quota", reason)
+        self.assertIn("limits.cpu=4", reason)
+        # The generic sentence adds nothing once the specific one is present.
+        self.assertNotIn("minimum availability", reason)
+
+        # Without a ReplicaFailure the previous behaviour is unchanged.
+        deployment["status"]["conditions"] = [
+            {
+                "type": "Available",
+                "status": "False",
+                "message": "Deployment does not have minimum availability.",
+            }
+        ]
+        self.assertIn(
+            "minimum availability",
+            _rollout_stall_reason(_NoPods(), deployment, "ns-a", "demo"),
+        )
+
+    def test_the_two_tenant_limits_are_documented_with_their_real_numbers(self) -> None:
+        """Whatever the two limits are, the document must state both.
+
+        `maxDeployments` refuses at submission; the namespace ResourceQuota
+        refuses at rollout. Deriving one from the other would be a product
+        decision, so this only pins that the smaller one is written down with the
+        number it actually is -- a reader who sees 10 and no second number plans
+        for 10 sites and discovers the fourth is the last.
+        """
+        from sites.k8s_resources import TENANT_CPU_LIMIT
+        from sites.validation import DEFAULT_MAX_DEPLOYMENTS
+
+        spec = normalize_deploy_payload(payload(), DEFAULT_MERCHANT_ID, "local")
+        containers = deployment_resource(spec, "ns-a")["spec"]["template"]["spec"][
+            "containers"
+        ]
+        self.assertTrue(containers)
+        per_site_cpu = {
+            container["resources"]["limits"]["cpu"] for container in containers
+        }
+        self.assertEqual(per_site_cpu, {"1"}, "one CPU per site is what makes the two comparable")
+        concurrent = int(TENANT_CPU_LIMIT)
+        self.assertLess(
+            concurrent,
+            DEFAULT_MAX_DEPLOYMENTS,
+            "if these ever agree, drop the limitation instead of updating it",
+        )
+        readme = (pathlib.Path(__file__).resolve().parent.parent / "README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Two tenant limits disagree", readme)
+        self.assertIn(f"run **{concurrent}** sites at once", readme)
+        self.assertIn(f"`maxDeployments` (default {DEFAULT_MAX_DEPLOYMENTS})", readme)
+
     def test_new_revision_is_verified_before_keda_is_enabled(self) -> None:
         with using_backend("gateway"):
             spec = normalize_deploy_payload(

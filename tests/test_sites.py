@@ -1369,6 +1369,34 @@ class CommonTests(unittest.TestCase):
         for component in response["components"]:
             self.assertEqual(component["verification"], evidence)
 
+    def test_bundle_components_carry_the_reason_they_failed(self) -> None:
+        # A component that never rolled out reported `Failed` and nothing else,
+        # so the caller had no way to tell an exhausted tenant quota from an
+        # image that will not pull. The operator writes the reason onto the
+        # resource either way; only the projection dropped it.
+        objects = bundle_resources(
+            "demo-stack",
+            self._sample_components(),
+            DEFAULT_MERCHANT_ID,
+            "local",
+        )
+        reason = (
+            "Deployment was not ready within 120s (exceeded quota: "
+            "sites-tenant-quota, requested: limits.cpu=1, used: limits.cpu=4)"
+        )
+        for resource in objects:
+            resource["metadata"]["generation"] = 1
+            resource["status"] = {
+                "phase": "Failed",
+                "observedGeneration": 1,
+                "message": reason,
+            }
+        response = _bundle_response("demo-stack", objects)
+        self.assertEqual(response["phase"], "Failed")
+        self.assertTrue(response["components"])
+        for component in response["components"]:
+            self.assertEqual(component["message"], reason)
+
 def _crd_spec_properties() -> set[str]:
     """Read the SiteDeployment spec fields the CRD actually declares.
 

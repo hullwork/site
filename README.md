@@ -175,7 +175,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1047 tests
+make test        # 1050 tests
 make test-db-down
 ```
 
@@ -414,6 +414,13 @@ production is worse off than one who reads them here.
   the reference Chart. Admission uses a process-local lock and reconciliation has no leader
   election, so scaling past one replica requires distributed admission and leader election
   first.
+- **Two tenant limits disagree, and only one of them refuses at submission time.** Admission
+  counts deployments against `maxDeployments` (default 10) and answers `429 quota_exceeded`.
+  The tenant namespace also carries a `ResourceQuota` of `SITES_TENANT_CPU_LIMIT` (default 4)
+  against a fixed `limits.cpu: 1` per site, so a tenant can run **4** sites at once. Numbers
+  5 through 10 are accepted with a 200 and then fail to roll out. The refusal now names the
+  exhausted quota rather than only reporting a readiness timeout, but the two numbers are
+  still set independently.
 - `sync_once()` holds the API's mutation lock across a Kubernetes `GET`. The Kubernetes
   client timeout (10s) and the mutation-lock acquire timeout (`SITES_MUTATION_LOCK_TIMEOUT`,
   10s) are the same order of magnitude, so a slow apiserver can make write paths return
