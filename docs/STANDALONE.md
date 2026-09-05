@@ -4,11 +4,19 @@ For a first source-checkout trial, use the disposable kubeadm workflow from the 
 root:
 
 ```bash
+make quickstart-doctor  # checks commands, Docker, Python, and fixed host ports
 make quickstart
 make quickstart-access   # terminal 1: opens and serves the console
-make quickstart-token    # terminal 2: paste into the Admin token field
+make quickstart-token    # terminal 2: paste into 管理员 token / Admin token
 make quickstart-clean    # deletes only the site-quickstart Lima VM and local state
 ```
+
+The trial VM is configured for 6 CPUs, 8 GiB RAM, and a 40 GiB sparse disk. It needs
+outbound HTTPS while the Ubuntu, Kubernetes, Cilium, and workload images download, plus
+host ports 18090–18098 and 18447. A first uncached install may take 5–25 minutes.
+`make quickstart` exits after printing the proof. Keep `make quickstart-access` running;
+pressing Ctrl-C there closes only the console tunnel, not the cluster. In the default
+Chinese UI choose **进入控制台**; in English choose **Enter the console**.
 
 That path creates a single-node Lima VM, installs Kubernetes 1.36 with kubeadm, installs
 a pinned Cilium release, and builds the control image locally. The Helm release supplies
@@ -16,11 +24,14 @@ its own local storage provisioner, enables Prometheus, deploys `examples/hello-s
 gates success on the deployment's HTTP status/body digest, a host-openable public URL with
 the same body digest, plus the admin metrics and deployment-snapshot APIs. It needs no
 pre-created Lima network, external image, or other repository. After login, the included
-application appears under **Applications** as
+application appears under **应用 / Applications** as
 `local/local/hello-site`, including an **Open** action; use **Monitor → Single application**
 for its resource samples. **Deploy application** creates or updates from an existing
 container image: public applications receive a browser URL, while internal applications
 are explicitly labeled as having no public URL.
+
+`make quickstart-clean` is intentionally destructive only to the disposable trial: it
+deletes that VM, every application inside it, and this checkout's local kubeconfig.
 
 The lower-level path installs Site into the Kubernetes context selected by `kubectl`.
 Review the current context before continuing:

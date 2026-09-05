@@ -21,8 +21,31 @@ environments, not a public hosting platform — [Known limitations](#known-limit
 
 ## See the proof locally
 
-The fastest path is deliberately end to end. With Lima, Docker, `kubectl`, Helm, `uv`,
-and Python 3.12+ installed, one command creates a disposable single-node Kubernetes
+### Host prerequisites
+
+The supported source-checkout trial runs on macOS or Linux with hardware virtualization,
+outbound HTTPS, and enough capacity for a Lima VM configured with **6 CPUs, 8 GiB RAM,
+and a 40 GiB sparse disk**. Install Git, Lima, Docker, `kubectl`, Helm, `curl`, `uv`,
+`lsof`, and Python 3.12+. Docker must be running, not merely installed.
+
+On macOS with Homebrew, the command-line dependencies are:
+
+```bash
+brew install git lima kubectl helm uv python lsof
+brew install --cask docker
+open -a Docker                    # wait until Docker reports that it is running
+```
+
+Linux users should install [Docker Engine](https://docs.docker.com/engine/install/),
+[Lima](https://lima-vm.io/docs/installation/),
+[`kubectl`](https://kubernetes.io/docs/tasks/tools/), and
+[Helm](https://helm.sh/docs/intro/install/) using their distribution's supported path.
+Run `make quickstart-doctor` at any time for an explicit dependency, Docker-daemon, Python,
+and local-port check. The first uncached run downloads a VM and several container images;
+depending on the network it can take 5–25 minutes and needs ports 18090–18098 and 18447.
+
+The fastest path is deliberately end to end. With the prerequisites above, one command
+creates a disposable single-node Kubernetes
 cluster with `kubeadm`, builds the image from this checkout, installs Site and Prometheus,
 deploys the included HTML example, and refuses to pass until both server-side HTTP
 verification and the administrative observability APIs return real evidence:
@@ -46,9 +69,10 @@ Site kubeadm quickstart passed
   observability: available
 ```
 
-See the same application, dependency health, verification result, and metrics in the
-management console. Keep the first command running; it opens the browser automatically
-when possible:
+`make quickstart` finishes after it has printed the verified public URL; it does not need
+to stay open. To see the same application, dependency health, verification result, and
+metrics in the management console, use two terminals. Keep terminal 1 running because it
+owns the local console tunnel and opens the browser automatically when possible:
 
 ```bash
 # terminal 1
@@ -58,16 +82,20 @@ make quickstart-access
 make quickstart-token
 ```
 
-Paste the second command's value into **Admin token** and choose **Enter the console**.
-The included application is visible immediately under **Applications** as
+Paste the second command's value into **管理员 token / Admin token** and choose
+**进入控制台 / Enter the console**. Only paste this secret into the local console URL
+printed by terminal 1; do not commit or share it. The included application is visible
+immediately under **应用 / Applications** as
 `local/local/hello-site`; its HTTP verification and digests are in **Run details**, and
 its **Open** action reaches the browser-visible address. CPU/memory samples are under
 **Monitor → Single application**. Use **Deploy application** to create or update an
 application from an existing container image; choose **Public** to receive a browser URL,
 or **Internal** when no public URL should exist. The token remains in
 a Kubernetes Secret and is never written into this checkout or browser storage. Inspect
-the running objects with `make quickstart-status`; remove only the `site-quickstart` Lima
-VM and repository-local kubeconfig with `make quickstart-clean`.
+the running objects with `make quickstart-status`. Pressing Ctrl-C in terminal 1 only
+closes console access; the application and cluster keep running. `make quickstart-clean`
+permanently deletes the disposable `site-quickstart` VM, all applications inside it, and
+the repository-local kubeconfig; it does not touch another cluster or repository.
 
 This trial harness is entirely owned by this repository: it uses Lima's default network,
 bootstraps Kubernetes directly with kubeadm, and builds the control image locally. No
@@ -125,7 +153,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1030 tests
+make test        # 1031 tests
 make test-db-down
 ```
 

@@ -23,8 +23,9 @@ started_at=$SECONDS
 
 usage() {
   cat <<'EOF'
-Usage: scripts/quickstart-kubeadm.sh <up|status|access|token|clean>
+Usage: scripts/quickstart-kubeadm.sh <doctor|up|status|access|token|clean>
 
+doctor  Check every host dependency and fixed local port before installation.
 up      Create one disposable Lima VM, bootstrap Kubernetes with kubeadm,
         build Site from this checkout, deploy the example, and prove it.
 status  Show the node, Site workloads, example, verification, and monitoring.
@@ -32,7 +33,8 @@ access  Forward and open the console at http://127.0.0.1:18091/console/.
 token   Print the disposable trial's local admin token for console login.
 clean   Delete only the site-quickstart VM and this checkout's .site-kubeadm state.
 
-Prerequisites: Lima, Docker, kubectl, Helm, curl, uv, and Python 3.12+.
+Prerequisites: Lima, a running Docker daemon, kubectl, Helm, curl, uv, lsof,
+and Python 3.12+; the VM is configured for 6 CPUs, 8 GiB RAM, and a 40 GiB disk.
 No other repository, pre-created Lima network, or published Site image is used.
 EOF
 }
@@ -44,8 +46,65 @@ require_command() {
   }
 }
 
+check_prerequisites() {
+  local command_name missing=()
+  for command_name in limactl docker kubectl helm curl uv python3 lsof; do
+    command -v "$command_name" >/dev/null 2>&1 || missing+=("$command_name")
+  done
+  if ((${#missing[@]})); then
+    printf 'quickstart prerequisites are missing: %s\n' "${missing[*]}" >&2
+    echo 'Install guide: https://github.com/hullwork/site#host-prerequisites' >&2
+    exit 2
+  fi
+
+  python3 - <<'PY' || exit 2
+import sys
+if sys.version_info < (3, 12):
+    raise SystemExit(
+        f"Python 3.12+ is required; found {sys.version.split()[0]}. "
+        "See https://www.python.org/downloads/"
+    )
+PY
+
+  if ! docker info >/dev/null 2>&1; then
+    echo 'Docker is installed, but its daemon is not reachable.' >&2
+    echo 'Start Docker Desktop (macOS) or the Docker service (Linux), then rerun make quickstart.' >&2
+    exit 2
+  fi
+
+  # These are the complete fixed-port contract of the reference VM. Checking
+  # all of them now avoids a Lima forwarding failure several minutes later.
+  if ! vm_running; then
+    local port busy=()
+    for port in "$api_port" "$console_port" 18090 18092 18093 18094 18095 18096 18097 18098; do
+      if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+        busy+=("$port")
+      fi
+    done
+    if ((${#busy[@]})); then
+      printf 'quickstart host ports are already in use: %s\n' "${busy[*]}" >&2
+      echo 'Stop the process or older Site trial using those ports, then rerun make quickstart.' >&2
+      exit 2
+    fi
+  fi
+
+  cat <<'EOF'
+Quickstart doctor passed
+  commands: available
+  Python: 3.12 or newer
+  Docker daemon: reachable
+  local ports: available or owned by this trial
+  VM allocation: 6 CPUs, 8 GiB RAM, 40 GiB sparse disk
+  network: outbound HTTPS is required while Lima, Kubernetes, Cilium, and workload images download
+EOF
+}
+
 vm_exists() {
   limactl list --quiet | grep -Fxq "$vm"
+}
+
+vm_running() {
+  vm_exists && limactl list "$vm" --format '{{.Status}}' 2>/dev/null | grep -Fxq Running
 }
 
 kube() {
@@ -288,10 +347,11 @@ Site kubeadm quickstart passed
   observability: available
 
 Next:
-  make quickstart-access   # http://127.0.0.1:$console_port/console/
-  make quickstart-token    # paste into the console login form
+  terminal 1: make quickstart-access   # keep it running; opens http://127.0.0.1:$console_port/console/
+  terminal 2: make quickstart-token    # paste into "管理员 token / Admin token"
+  choose "进入控制台 / Enter the console"
   make quickstart-status
-  make quickstart-clean
+  make quickstart-clean    # permanently deletes this disposable VM and its applications
 EOF
 }
 
@@ -333,9 +393,11 @@ $opener
 
 First login:
   1. In another terminal, run: make quickstart-token
-  2. Paste that value into "Admin token", then choose "Enter the console".
+  2. Paste that value into "管理员 token / Admin token".
+  3. Choose "进入控制台 / Enter the console".
 
-The example application is under "Applications" as local/local/hello-site.
+The example application is under "应用 / Applications" as local/local/hello-site.
+Its "打开 / Open" action reaches the public URL printed by make quickstart.
 Press Ctrl-C here to stop console access without stopping the cluster.
 EOF
   wait "$pid" || true
@@ -360,10 +422,9 @@ clean() {
 }
 
 case "$action" in
+  doctor) check_prerequisites ;;
   up)
-    for command_name in limactl docker kubectl helm curl uv python3 lsof; do
-      require_command "$command_name"
-    done
+    check_prerequisites
     create_cluster
     prove_site
     ;;

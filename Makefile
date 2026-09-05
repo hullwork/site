@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 CONTROL_IMAGE ?= site-control:local
 
-.PHONY: help install test test-db test-db-down test-supabase test-oss console homepage-check image chart-lint chart-render benchmark quickstart quickstart-status quickstart-access quickstart-token quickstart-clean standalone-install standalone-smoke standalone-uninstall
+.PHONY: help install test test-db test-db-down test-supabase test-oss console homepage-check image chart-lint chart-render benchmark quickstart-doctor quickstart quickstart-status quickstart-access quickstart-token quickstart-clean standalone-install standalone-smoke standalone-uninstall
 
 # Generated from the targets themselves rather than kept as a second list. The
 # hand-written listing this replaces had already lost `help`, and nothing could
@@ -78,6 +78,9 @@ chart-render: ## — render the self-contained Helm package
 
 benchmark: ## — run the fail-closed deterministic benchmark profile
 	uv run --locked --extra dev python scripts/run-benchmark.py --profile contract
+
+quickstart-doctor: ## — check every host prerequisite and local port before the trial
+	scripts/quickstart-kubeadm.sh doctor
 
 quickstart: ## — build and prove Site on a disposable kubeadm VM
 	scripts/quickstart-kubeadm.sh up
