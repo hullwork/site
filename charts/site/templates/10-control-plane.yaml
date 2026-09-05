@@ -595,7 +595,15 @@ spec:
             - name: SITES_CONTROL_NAMESPACE
               value: {{ .Values.namespaces.control | quote }}
             - name: SITES_PUBLIC_URL_HOST
-              value: http://127.0.0.1
+              value: {{ .Values.nodePort.publicUrlHost | quote }}
+            # Declared only where this environment really does forward a host
+            # port to the NodePort pool. Left out, exposure.host_port_base()
+            # returns None and a public deployment reports no URL rather than one
+            # built from a mapping this host may not have. See values.yaml.
+            {{- with .Values.nodePort.hostPortBase }}
+            - name: SITES_HOST_PORT_BASE
+              value: {{ . | quote }}
+            {{- end }}
             # The Pod network this release's NetworkPolicies exclude, and this
             # Pod's own address to check it against. The operator refuses to
             # start if the address is outside the declaration, or if the

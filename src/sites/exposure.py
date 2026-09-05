@@ -45,13 +45,32 @@ def bounded_public_route_default(configured: int) -> int:
     """Clamp a default quota to the selected backend's physical capacity."""
     capacity = backend().capacity
     return min(configured, capacity) if capacity is not None else configured
-# Public NodePort URLs use host_port = HOST_PORT_BASE + nodePort - NODE_PORT_MIN.
+# Public NodePort URLs use host_port = host_port_base() + nodePort - NODE_PORT_MIN.
 # topology.py and its contract tests pin the same mapping, preventing a deployment
 # from becoming ready at a host URL that cannot actually be opened.
 PUBLIC_URL_HOST = (
     getenv("SITES_PUBLIC_URL_HOST", "http://127.0.0.1") or "http://127.0.0.1"
 )
-HOST_PORT_BASE = int(getenv("SITES_HOST_PORT_BASE", "18090") or "18090")
+
+
+def host_port_base() -> int | None:
+    """Host port this environment maps NODE_PORT_MIN to, or None if none is declared.
+
+    A NodePort Service is reachable at ``<node>:<nodePort>``; the extra hop from
+    a host port to that node port is a fact about the machine in front of the
+    cluster, not about the cluster. Only the reference kubeadm trial publishes
+    one (Lima forwards guest 30080..30088 to host 18090..18098 and the Chart
+    declares ``nodePort.hostPortBase``), so there is deliberately no default:
+    assuming 18090 everywhere hands foreign clusters a URL that resolves to
+    whatever else happens to own that host port, and the caller cannot tell that
+    from a working one. Undeclared, ``public_url`` reports nothing rather than a
+    guess -- the same reason ``clusterNetwork.podCIDR`` has no default.
+
+    Read per call rather than frozen at import so the Chart, the trial script and
+    the tests can each declare their own mapping, exactly like ``backend()``.
+    """
+    declared = (getenv("SITES_HOST_PORT_BASE", "") or "").strip()
+    return int(declared) if declared else None
 
 # --- Gateway backend parameters ---
 # sslip.io resolves <any>.<IP>.sslip.io to the IP, so the local environment can provide each
@@ -210,7 +229,10 @@ class NodePortExposure(ExposureBackend):
             return None
         if port <= 0:
             return None
-        return f"{PUBLIC_URL_HOST}:{HOST_PORT_BASE + port - NODE_PORT_MIN}"
+        base = host_port_base()
+        if base is None:
+            return None
+        return f"{PUBLIC_URL_HOST}:{base + port - NODE_PORT_MIN}"
 
 
 class GatewayExposure(ExposureBackend):

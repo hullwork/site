@@ -53,6 +53,33 @@ def using_backend(name: str):
             os.environ["SITES_EXPOSURE_BACKEND"] = previous
 
 
+# The one environment that really does forward this host port to NODE_PORT_MIN:
+# the repository's own kubeadm trial, via dev/kubeadm/lima.yaml.
+REFERENCE_HOST_PORT_BASE = "18090"
+
+
+@contextmanager
+def using_host_port_base(base: str | None):
+    """Temporarily declare, or withdraw, this environment's host port mapping.
+
+    exposure.host_port_base() rereads env per call for the same reason backend()
+    does: the mapping belongs to whoever set the host up, so a module constant
+    frozen at import would let the first test decide it for every later one.
+    """
+    previous = os.environ.get("SITES_HOST_PORT_BASE")
+    if base is None:
+        os.environ.pop("SITES_HOST_PORT_BASE", None)
+    else:
+        os.environ["SITES_HOST_PORT_BASE"] = base
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("SITES_HOST_PORT_BASE", None)
+        else:
+            os.environ["SITES_HOST_PORT_BASE"] = previous
+
+
 def _spec(*, merchant=DEFAULT_MERCHANT_ID, user="local", **overrides):
     payload = {
         "name": "demo",
@@ -685,11 +712,27 @@ class SingleReplicaInvariantTest(unittest.TestCase):
 
 class PublicUrlTest(unittest.TestCase):
     def test_nodeport_url_is_host_plus_mapped_port(self) -> None:
-        with using_backend("nodeport"):
+        with using_backend("nodeport"), using_host_port_base(
+            REFERENCE_HOST_PORT_BASE
+        ):
             url = public_url_for_spec(_spec())
         self.assertEqual(
-            url, f"{exposure.PUBLIC_URL_HOST}:{exposure.HOST_PORT_BASE}"
+            url, f"{exposure.PUBLIC_URL_HOST}:{REFERENCE_HOST_PORT_BASE}"
         )
+
+    def test_nodeport_url_is_absent_when_no_host_mapping_is_declared(self) -> None:
+        """No declared mapping must yield no URL, not the reference one.
+
+        The offset formula describes a host that really does forward 18090.. to
+        30080.., which the trial does and an arbitrary cluster does not. While
+        18090 was the default, every other installation was handed a URL naming
+        whatever else owned that host port, and nothing could tell it from a
+        working one: server-side verification passes either way because it probes
+        the in-cluster address, so the failure only ever surfaced as a user
+        clicking Open and getting nothing.
+        """
+        with using_backend("nodeport"), using_host_port_base(None):
+            self.assertIsNone(public_url_for_spec(_spec()))
 
     def test_gateway_url_is_a_hostname_not_a_port_offset(self) -> None:
         with using_backend("gateway"):

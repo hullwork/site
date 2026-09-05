@@ -13,6 +13,7 @@
     "mcpEndpoint",
     "monitoring",
     "namespaces",
+    "nodePort",
     "postgresql",
     "service",
     "storage",
@@ -360,6 +361,33 @@
           "type": "string",
           "description": "Pod network of the target cluster in CIDR notation. No default; an empty value fails the render.",
           "pattern": "^$|^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+        }
+      }
+    },
+    "nodePort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "publicUrlHost",
+        "hostPortBase"
+      ],
+      "properties": {
+        "publicUrlHost": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hostPortBase": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^$|^[0-9]{1,5}$"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          ]
         }
       }
     }

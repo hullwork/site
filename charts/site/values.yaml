@@ -109,6 +109,20 @@ gateway:
   httpNodePort: null
   metricsNodePort: null
 
+# How a browser outside the cluster reaches a site published by the `nodeport`
+# exposure backend. Both keys describe the machine in front of the cluster, not
+# the cluster, so hostPortBase has no default for the same reason
+# clusterNetwork.podCIDR has none: a wrong one is not visibly wrong. The
+# reference kubeadm trial owns a relay that forwards guest 30080..30088 to host
+# 18090..18098 and therefore declares hostPortBase: 18090. Where no such mapping
+# exists, leaving it empty makes a public deployment report no URL, instead of
+# one assembled from a host port that something unrelated may be serving.
+# Server-side verification is unaffected either way: it uses the in-cluster
+# address and remains the evidence that the site serves traffic.
+nodePort:
+  publicUrlHost: http://127.0.0.1
+  hostPortBase: ""
+
 monitoring:
   enabled: false
 
