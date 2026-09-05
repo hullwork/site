@@ -34,6 +34,8 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn("policyCIDRMatchMode=nodes", script)
         self.assertIn("site-nodeport-relay.service", script)
         self.assertIn("SITE-NODEPORT-SNAT", script)
+        self.assertIn('grep -Fx "$vm" >/dev/null', script)
+        self.assertNotIn('grep -Fxq "$vm"', script)
         self.assertNotIn('node-role.kubernetes.io/control-plane-', script)
         self.assertIn("dev/kubeadm/lima.yaml", script)
 

@@ -55,6 +55,8 @@ all_worker_vms=()
 for index in $(seq 1 4); do
   all_worker_vms+=("${vm}-w${index}")
 done
+worker_label=workers
+[[ "$worker_count" -eq 1 ]] && worker_label=worker
 
 usage() {
   cat <<'EOF'
@@ -131,7 +133,7 @@ Quickstart doctor passed
   Python: 3.12 or newer
   Docker daemon: reachable
   local ports: available or owned by this trial
-  topology: 1 control-plane + $worker_count workers ($((worker_count + 1)) kubeadm nodes)
+  topology: 1 control-plane + $worker_count $worker_label ($((worker_count + 1)) kubeadm nodes)
   control-plane allocation: 4 CPUs, 4 GiB RAM, 30 GiB sparse disk
   worker allocation: ${worker_cpus} CPUs, ${worker_memory} GiB RAM, ${worker_disk} GiB sparse disk each
   total allocation: $((4 + worker_count * worker_cpus)) CPUs, $((4 + worker_count * worker_memory)) GiB RAM, $((30 + worker_count * worker_disk)) GiB sparse disk
@@ -140,7 +142,7 @@ EOF
 }
 
 vm_exists() {
-  limactl list --quiet | grep -Fxq "$vm"
+  limactl list --quiet | grep -Fx "$vm" >/dev/null
 }
 
 vm_running() {
@@ -148,7 +150,7 @@ vm_running() {
 }
 
 instance_exists() {
-  limactl list --quiet | grep -Fxq "$1"
+  limactl list --quiet | grep -Fx "$1" >/dev/null
 }
 
 instance_owned() {
@@ -557,7 +559,7 @@ print(pods[0]["spec"]["nodeName"])
   existing_node=$(kube get nodes --no-headers | awk '$2 == "Ready" {count++} END {print count+0}')
   cat <<EOF
 Worker scaling passed
-  topology: 1 control-plane + $desired workers ($existing_node Ready)
+  topology: 1 control-plane + $desired $worker_label ($existing_node Ready)
   retained storage worker: ${vm}-w1
   hello-site node: $app_node
   public URL: $public_url (HTTP body digest verified)
@@ -717,7 +719,7 @@ if bad:
 
 Site kubeadm quickstart passed
   elapsed: $((SECONDS - started_at))s
-  topology: 1 control-plane + $worker_count workers ($ready_nodes Ready)
+  topology: 1 control-plane + $worker_count $worker_label ($ready_nodes Ready)
   example node: $app_node
   control-plane scheduling: protected by NoSchedule taint
   phase: $phase
