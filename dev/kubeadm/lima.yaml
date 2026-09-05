@@ -4,21 +4,24 @@ images:
   - location: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img
     arch: aarch64
 
-cpus: 6
-memory: 8GiB
-disk: 40GiB
+# Control-plane defaults. The quickstart overrides these for worker VMs.
+cpus: 4
+memory: 4GiB
+disk: 30GiB
 
-# The host talks to the API only through this repository-owned forward. The VM
-# uses Lima's default network, so it does not require a pre-created network or
-# configuration from another project.
+# The host talks to the API only through this repository-owned forward. The
+# quickstart attaches every VM to a user-v2 network that it creates and owns;
+# no pre-created network or configuration from another project is required.
 portForwards:
   - guestPort: 6443
     hostPort: 18447
     static: true
-  # NodePort exposure is the quickstart's public application path. Keep this
-  # mapping aligned with src/sites/exposure.py: 30080, 30082-30088 become
-  # 18090, 18092-18098. 30081 is deliberately excluded and 18091 serves the
-  # admin console through kubectl port-forward instead.
+  # NodePort exposure is the quickstart's public application path. Lima sends
+  # these fixed forwards to guest loopback; quickstart-kubeadm.sh owns a narrow
+  # systemd/iptables relay from loopback to retained worker w1 so the target Pod
+  # may live on any worker. Keep this mapping aligned with src/sites/exposure.py:
+  # 30080, 30082-30088 become 18090, 18092-18098. 30081 is deliberately excluded
+  # and 18091 serves the admin console through kubectl port-forward instead.
   - guestPort: 30080
     hostPort: 18090
     static: true

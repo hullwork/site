@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 CONTROL_IMAGE ?= site-control:local
 
-.PHONY: help install test test-db test-db-down test-supabase test-oss console homepage-check image chart-lint chart-render benchmark quickstart-doctor quickstart quickstart-status quickstart-access quickstart-token quickstart-clean standalone-install standalone-smoke standalone-uninstall
+.PHONY: help install test test-db test-db-down test-supabase test-oss console homepage-check image chart-lint chart-render benchmark quickstart-doctor quickstart quickstart-scale quickstart-status quickstart-access quickstart-token quickstart-clean standalone-install standalone-smoke standalone-uninstall
 
 # Generated from the targets themselves rather than kept as a second list. The
 # hand-written listing this replaces had already lost `help`, and nothing could
@@ -82,8 +82,11 @@ benchmark: ## — run the fail-closed deterministic benchmark profile
 quickstart-doctor: ## — check every host prerequisite and local port before the trial
 	scripts/quickstart-kubeadm.sh doctor
 
-quickstart: ## — build and prove Site on a disposable kubeadm VM
+quickstart: ## — build and prove Site on a disposable multi-node kubeadm cluster
 	scripts/quickstart-kubeadm.sh up
+
+quickstart-scale: ## — reconcile the trial to SITES_QUICKSTART_WORKERS=1-4
+	scripts/quickstart-kubeadm.sh scale
 
 quickstart-status: ## — inspect the disposable kubeadm trial
 	scripts/quickstart-kubeadm.sh status
@@ -94,7 +97,7 @@ quickstart-access: ## — open and serve the console from the disposable kubeadm
 quickstart-token: ## — print the disposable trial's local admin token
 	scripts/quickstart-kubeadm.sh token
 
-quickstart-clean: ## — delete only the disposable Site kubeadm VM
+quickstart-clean: ## — delete only the disposable Site kubeadm VMs and network
 	scripts/quickstart-kubeadm.sh clean
 
 standalone-install: ## — bootstrap local Secrets and install the Helm Chart

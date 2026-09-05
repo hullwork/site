@@ -90,7 +90,25 @@
       }
     },
     "localPathProvisioner": {
-      "$ref": "#/$defs/feature"
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "allowedNodeNames"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "allowedNodeNames": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
     },
     "postgresql": {
       "type": "object",

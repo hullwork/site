@@ -25,7 +25,20 @@ class HelmPackageContractTests(unittest.TestCase):
     def test_quickstart_is_a_repository_owned_kubeadm_workflow(self) -> None:
         script = (ROOT / "scripts" / "quickstart-kubeadm.sh").read_text(encoding="utf-8")
         self.assertIn("sudo kubeadm init", script)
-        self.assertIn('getent hosts "$vm"', script)
+        self.assertIn("sudo kubeadm token create", script)
+        self.assertIn('getent hosts "$instance"', script)
+        self.assertIn('limactl network create "$network" --mode=user-v2', script)
+        self.assertIn('--network="lima:$network"', script)
+        self.assertIn("node-role.kubernetes.io/worker=worker", script)
+        self.assertIn("control-plane node must retain its NoSchedule taint", script)
+        self.assertIn("policyCIDRMatchMode=nodes", script)
+        self.assertIn("site-nodeport-relay.service", script)
+        self.assertIn("site-nodeport-relay.timer", script)
+        self.assertIn("OnUnitActiveSec=15s", script)
+        self.assertIn("SITE-NODEPORT-SNAT", script)
+        self.assertIn('grep -Fx "$vm" >/dev/null', script)
+        self.assertNotIn('grep -Fxq "$vm"', script)
+        self.assertNotIn('node-role.kubernetes.io/control-plane-', script)
         self.assertIn("dev/kubeadm/lima.yaml", script)
 
     def test_quickstart_lima_template_needs_no_precreated_network(self) -> None:
@@ -33,6 +46,9 @@ class HelmPackageContractTests(unittest.TestCase):
             (ROOT / "dev" / "kubeadm" / "lima.yaml").read_text(encoding="utf-8")
         )
         self.assertNotIn("networks", template)
+        self.assertEqual(template["cpus"], 4)
+        self.assertEqual(template["memory"], "4GiB")
+        self.assertEqual(template["disk"], "30GiB")
         self.assertEqual(template["portForwards"][0]["guestPort"], 6443)
         forwards = {
             item["guestPort"]: item["hostPort"]
@@ -42,9 +58,39 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertEqual(forwards[30088], 18098)
         self.assertNotIn(30081, forwards)
 
+        rendered = subprocess.check_output([
+            "helm", "template", "site", str(CHART), *POD_CIDR,
+            "--set", "localPathProvisioner.enabled=true",
+            "--set-string", "localPathProvisioner.allowedNodeNames[0]=site-quickstart-w1",
+        ], text=True)
+        storage_class = next(
+            item for item in yaml.safe_load_all(rendered)
+            if isinstance(item, dict) and item.get("kind") == "StorageClass"
+        )
+        expression = storage_class["allowedTopologies"][0]["matchLabelExpressions"][0]
+        self.assertEqual(expression["key"], "kubernetes.io/hostname")
+        self.assertEqual(expression["values"], ["site-quickstart-w1"])
+        for workload in (
+            item for item in yaml.safe_load_all(rendered)
+            if isinstance(item, dict) and item.get("kind") in {"Deployment", "StatefulSet"}
+        ):
+            pod_spec = workload["spec"]["template"]["spec"]
+            self.assertNotIn(
+                "node-role.kubernetes.io/control-plane",
+                pod_spec.get("nodeSelector", {}),
+                workload["metadata"]["name"],
+            )
+            self.assertFalse(
+                any(
+                    item.get("key") == "node-role.kubernetes.io/control-plane"
+                    for item in pod_spec.get("tolerations", [])
+                ),
+                workload["metadata"]["name"],
+            )
+
     def test_makefile_exposes_the_complete_kubeadm_trial_lifecycle(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        for target in ("quickstart-doctor", "quickstart", "quickstart-status", "quickstart-access", "quickstart-token", "quickstart-clean"):
+        for target in ("quickstart-doctor", "quickstart", "quickstart-scale", "quickstart-status", "quickstart-access", "quickstart-token", "quickstart-clean"):
             self.assertRegex(makefile, rf"(?m)^{target}:")
         script = (ROOT / "scripts" / "quickstart-kubeadm.sh").read_text(encoding="utf-8")
         self.assertIn('open "$url"', script)
@@ -53,6 +99,12 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn('"merchantId":"local","userId":"local"', script)
         self.assertIn('--exposure public', script)
         self.assertIn('public URL body digest', script)
+        self.assertIn('--connect-timeout 2 --max-time 5', script)
+        self.assertIn('public URL did not return a successful response within the bounded retry window', script)
+        self.assertIn('kube drain "$worker"', script)
+        self.assertIn('localPathProvisioner.allowedNodeNames[0]', script)
+        self.assertIn('refusing to remove {node}: persistent volume', script)
+        self.assertIn('instance_owned "$worker"', script)
         self.assertIn('rollout restart', script)
         self.assertIn('deployment/sites-api deployment/sites-operator deployment/sites-activator', script)
         dependency_wait = script.index('statefulset/sites-postgres')
@@ -74,8 +126,10 @@ class HelmPackageContractTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         for fact in (
             "make quickstart-doctor",
-            "6 CPUs, 8 GiB RAM",
-            "5–25 minutes",
+            "8 CPUs, 10 GiB",
+            "8–30 minutes",
+            "SITES_QUICKSTART_WORKERS=3 make quickstart-scale",
+            "not a highly available production topology",
             "permanently deletes",
         ):
             self.assertIn(fact, readme)

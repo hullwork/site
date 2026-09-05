@@ -188,11 +188,13 @@ class NodePortExposure(ExposureBackend):
     allocates_ports = True
 
     def service_overrides(self, spec: dict[str, Any]) -> dict[str, Any]:
-        # externalTrafficPolicy: Local - the workload only falls on w1, which hosts NodePort;
-        # Changing to Cluster will cause the CP side to respond but there will be no local endpoint, and the host access will time out.
+        # The public host port enters through the control-plane VM in the
+        # repository-owned multi-node quickstart, while tenant workloads stay
+        # on workers. Cluster is therefore a correctness requirement: Local
+        # would drop traffic whenever the entry node has no local endpoint.
         return {
             "type": "NodePort",
-            "externalTrafficPolicy": "Local",
+            "externalTrafficPolicy": "Cluster",
             "nodePort": int(spec["nodePort"]),
         }
 

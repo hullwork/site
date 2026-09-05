@@ -128,11 +128,11 @@ class CapacityTest(unittest.TestCase):
 
 
 class ServiceShapeTest(unittest.TestCase):
-    def test_nodeport_backend_keeps_existing_shape(self) -> None:
+    def test_nodeport_backend_routes_from_entry_node_to_worker(self) -> None:
         with using_backend("nodeport"):
             service = service_resource(_spec(), "ulocal-local")
         self.assertEqual(service["spec"]["type"], "NodePort")
-        self.assertEqual(service["spec"]["externalTrafficPolicy"], "Local")
+        self.assertEqual(service["spec"]["externalTrafficPolicy"], "Cluster")
         self.assertEqual(service["spec"]["ports"][0]["nodePort"], 30080)
 
     def test_gateway_backend_uses_clusterip_and_drops_the_port(self) -> None:
