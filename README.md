@@ -26,12 +26,12 @@ environments, not a public hosting platform — [Known limitations](#known-limit
 The supported source-checkout trial runs on macOS or Linux with hardware virtualization,
 outbound HTTPS, and enough capacity for three Lima VMs configured with **8 CPUs, 10 GiB
 RAM, and 70 GiB of sparse disk in total**. Install Git, Lima, Docker, `kubectl`, Helm, `curl`, `uv`,
-`lsof`, and Python 3.12+. Docker must be running, not merely installed.
+and Python 3.12+. Docker must be running, not merely installed.
 
 On macOS with Homebrew, the command-line dependencies are:
 
 ```bash
-brew install git lima kubectl helm uv python lsof
+brew install git lima kubectl helm uv python
 brew install --cask docker
 open -a Docker                    # wait until Docker reports that it is running
 ```
@@ -175,7 +175,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1031 tests
+make test        # 1038 tests
 make test-db-down
 ```
 
@@ -207,6 +207,14 @@ SITES_CLUSTER_POD_CIDR=10.244.0.0/16 \
 SITES_LOCAL_PATH_PROVISIONER_ENABLED=false \
 scripts/cluster.sh up
 ```
+
+A public deployment on such a cluster reports **no URL** until you say how the outside
+reaches it. The `nodeport` backend puts each site on one node port from 30080–30088; only
+the kubeadm trial above also forwards those to host ports 18090–18098, so nothing else can
+be assumed. Add `SITES_HOST_PORT_BASE` (and `SITES_PUBLIC_URL_HOST` when the forwards do
+not answer on `http://127.0.0.1`) once such a forward exists. Server-side verification is
+independent of this: it probes the in-cluster address, so `status.verification` is evidence
+the site serves traffic whether or not a public URL is declared.
 
 The bootstrap helper generates credentials into a mode-0700 temporary directory and never
 writes them into the repository or a values file. **Do not use it for production.** For
@@ -428,9 +436,6 @@ production is worse off than one who reads them here.
 
 **Housekeeping**
 
-- **Historical UIDs remain in the Git history.** The working tree is clean, but publishing
-  with history attached does not clear them; a `git filter-repo` pass is required before the
-  repository is made public.
 - 45 `SITES_*` environment variables are read by `src/sites/` but appear in no document or
   chart — mostly activator, gateway, NodePort-pool, KEDA, and operator tuning. They have
   working defaults, and the most useful ones are now listed under

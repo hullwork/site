@@ -169,7 +169,8 @@ and an invalid value generally raises at import time rather than falling back.
 | `SITES_GATEWAY_NODE_PORT` | `30080` | NodePort the gateway listener is published on |
 | `SITES_NODE_PORT_MIN` / `SITES_NODE_PORT_MAX` | `30080` / `30088` | Allocation pool for the `nodeport` exposure backend |
 | `SITES_NODE_PORT_EXCLUDED` | `30081` | Ports removed from that pool |
-| `SITES_HOST_PORT_BASE` | `18090` | Base host port used by the local reference topology |
+| `SITES_HOST_PORT_BASE` | unset | Host port this environment forwards `SITES_NODE_PORT_MIN` to. Unset means no such forward exists and a `nodeport` deployment reports no public URL rather than guessing one; the Chart sets it from `nodePort.hostPortBase`, which only the kubeadm trial declares |
+| `SITES_PUBLIC_URL_HOST` | `http://127.0.0.1` | Scheme and host those forwards answer on; the Chart sets it from `nodePort.publicUrlHost` |
 | `SITES_SOURCE_PVC` | `sites-sources` | PVC that holds source packages when `SITES_SOURCE_BACKEND=pvc` |
 | `SITES_SOURCE_ROOT` | `/var/lib/sites/sources` | Mount path for that PVC |
 | `SITES_OSS_AUTH_SECRET` | `sites-oss-auth` | Secret holding object-storage credentials |

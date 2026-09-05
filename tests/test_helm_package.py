@@ -41,6 +41,27 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertNotIn('node-role.kubernetes.io/control-plane-', script)
         self.assertIn("dev/kubeadm/lima.yaml", script)
 
+    def test_the_port_preflight_binds_rather_than_listing_owned_sockets(self) -> None:
+        """The preflight must detect a busy port whoever owns it.
+
+        `lsof` reports only sockets owned by the user running it, so a quickstart
+        port held by root or another account read as free and `make quickstart`
+        then failed several minutes later on the Lima forward this check exists
+        to catch -- a false pass in exactly its own scenario. Binding the address
+        Lima binds answers the question for any owner.
+        """
+        script = (ROOT / "scripts" / "quickstart-kubeadm.sh").read_text(encoding="utf-8")
+        self.assertNotIn("lsof", script.replace("`lsof`", ""))
+        self.assertIn("ports_in_use()", script)
+        self.assertIn('probe.bind(("127.0.0.1", int(port)))', script)
+        self.assertIn("socket.SO_REUSEADDR", script)
+        # Both preflights go through it: the fixed-port contract and the
+        # API-server forward checked again just before the VM is created.
+        self.assertIn(
+            'busy=$(ports_in_use "$api_port" $(seq "$host_port_base"', script
+        )
+        self.assertIn('if [[ -n "$(ports_in_use "$api_port")" ]]; then', script)
+
     def test_quickstart_lima_template_needs_no_precreated_network(self) -> None:
         template = yaml.safe_load(
             (ROOT / "dev" / "kubeadm" / "lima.yaml").read_text(encoding="utf-8")
@@ -389,7 +410,44 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn("SITES_CONTROL_IMAGE_DIGEST", adapter)
         self.assertNotIn("INFRA_", adapter)
         self.assertNotIn("limactl", adapter)
+        self.assertIn("SITES_HOST_PORT_BASE", adapter)
+        self.assertIn("nodePort.hostPortBase", adapter)
 
+    def test_default_install_declares_no_host_port_mapping(self) -> None:
+        """The Chart must not assume a host forwards anything to the NodePort pool.
+
+        Only the environment around a cluster can know that, and a wrong guess is
+        not visibly wrong: the deployment is healthy and control-plane
+        verification passes, because verification probes the in-cluster address.
+        A default here therefore reaches the user as a public URL naming whatever
+        else happens to own that host port. Absent the variable,
+        exposure.host_port_base() returns None and no URL is claimed at all.
+        """
+        rendered = subprocess.run(
+            ["helm", "template", "site", str(CHART), *POD_CIDR],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertNotIn("SITES_HOST_PORT_BASE", rendered)
+        self.assertIn("SITES_PUBLIC_URL_HOST", rendered)
+
+        declared = subprocess.run(
+            [
+                "helm",
+                "template",
+                "site",
+                str(CHART),
+                *POD_CIDR,
+                "--set-string",
+                "nodePort.hostPortBase=18090",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn("SITES_HOST_PORT_BASE", declared)
+        self.assertIn('value: "18090"', declared)
 
 
 if __name__ == "__main__":
