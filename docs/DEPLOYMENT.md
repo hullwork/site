@@ -64,16 +64,24 @@ workflow, plus a separate `site-values-VERSION.yaml` digest-pinned override and
 
 ## Local kubeadm environment
 
-Prerequisites for the complete local trial: Lima, Docker, kubectl, Helm, uv, and
-Python 3.12+. The repository creates one disposable VM and bootstraps Kubernetes
-with kubeadm; it does not use a shared cluster or another checkout.
+Prerequisites for the complete local trial: Lima, a running Docker daemon, kubectl, Helm,
+curl, uv, lsof, and Python 3.12+. Run `make quickstart-doctor` for the executable preflight.
+The VM allocates 6 CPUs, 8 GiB RAM, and a 40 GiB sparse disk; outbound HTTPS and host
+ports 18090–18098 plus 18447 are required. The repository creates one disposable VM and
+bootstraps Kubernetes with kubeadm; it does not use a shared cluster or another checkout.
 
 ```bash
+make quickstart-doctor
 make quickstart
 make quickstart-status
 make quickstart-access
+make quickstart-token     # run in a second terminal, then log in
 make quickstart-clean
 ```
+
+`make quickstart` exits after verification. `make quickstart-access` must remain running
+while the console is in use; Ctrl-C stops only that tunnel. `make quickstart-clean`
+permanently removes the disposable VM and all applications stored inside it.
 
 The quickstart uses a single node to minimize first-run time. Production cluster
 provisioning, upgrades, backup, and disaster recovery are deliberately not

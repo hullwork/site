@@ -44,7 +44,7 @@ class HelmPackageContractTests(unittest.TestCase):
 
     def test_makefile_exposes_the_complete_kubeadm_trial_lifecycle(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        for target in ("quickstart", "quickstart-status", "quickstart-access", "quickstart-token", "quickstart-clean"):
+        for target in ("quickstart-doctor", "quickstart", "quickstart-status", "quickstart-access", "quickstart-token", "quickstart-clean"):
             self.assertRegex(makefile, rf"(?m)^{target}:")
         script = (ROOT / "scripts" / "quickstart-kubeadm.sh").read_text(encoding="utf-8")
         self.assertIn('open "$url"', script)
@@ -61,6 +61,24 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn('deployment/sites-registry', script[dependency_wait:restart])
         self.assertIn('deployment/sites-prometheus', script[dependency_wait:restart])
         self.assertIn('--timeout=15m', script[dependency_wait:restart])
+
+    def test_quickstart_explains_every_newcomer_handoff(self) -> None:
+        script = (ROOT / "scripts" / "quickstart-kubeadm.sh").read_text(encoding="utf-8")
+        self.assertIn("Quickstart doctor passed", script)
+        self.assertIn("Docker is installed, but its daemon is not reachable", script)
+        self.assertIn("Python 3.12+ is required", script)
+        self.assertIn("管理员 token / Admin token", script)
+        self.assertIn("进入控制台 / Enter the console", script)
+        self.assertIn("without stopping the cluster", script)
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        for fact in (
+            "make quickstart-doctor",
+            "6 CPUs, 8 GiB RAM",
+            "5–25 minutes",
+            "permanently deletes",
+        ):
+            self.assertIn(fact, readme)
 
     def test_newcomer_docs_name_kubeadm_and_not_the_kind_tool(self) -> None:
         docs = "\n".join(

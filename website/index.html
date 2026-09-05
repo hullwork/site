@@ -144,7 +144,7 @@
       </section>
 
       <section class="quickstart shell" id="quickstart">
-        <div class="quick-copy reveal"><div class="eyebrow"><span></span> Kubeadm-first quickstart</div><h2>One command.<br />A real cluster.<br />A live URL.</h2><p>The repository-owned trial creates a disposable Lima VM, bootstraps Kubernetes with kubeadm, installs Cilium and Site, deploys the included app, and refuses to pass without measured HTTP proof.</p><div class="requirements">Lima · Docker · kubectl · Helm · uv · Python 3.12+</div></div>
+        <div class="quick-copy reveal"><div class="eyebrow"><span></span> Kubeadm-first quickstart</div><h2>One command.<br />A real cluster.<br />A live URL.</h2><p>The repository-owned trial creates a disposable Lima VM, bootstraps Kubernetes with kubeadm, installs Cilium and Site, deploys the included app, and refuses to pass without measured HTTP proof.</p><div class="requirements">Git · Lima · running Docker · kubectl · Helm · uv · Python 3.12+<br />6 CPU · 8 GiB RAM · 40 GiB sparse disk · outbound HTTPS</div></div>
         <div class="terminal reveal delay-one">
           <div class="terminal-top"><div><i></i><i></i><i></i></div><span>site — zsh</span><button type="button" data-copy="# clone-and-run">Copy</button></div>
           <pre id="clone-and-run"><code><span>$</span> git clone https://github.com/hullwork/site.git
@@ -155,7 +155,10 @@
   phase: <strong>Running</strong>
   HTTP verification: <strong>200</strong>
   public URL: <u>http://127.0.0.1:18090</u>
-  public URL body: <strong>matches verification digest</strong></code></pre>
+  public URL body: <strong>matches verification digest</strong>
+
+<span>$</span> make quickstart-access  <b># keep terminal 1 open</b>
+<span>$</span> make quickstart-token   <b># run in terminal 2</b></code></pre>
           <div class="terminal-status"><span><i></i> kubeadm cluster ready</span><span>proof, not promises</span></div>
         </div>
       </section>
