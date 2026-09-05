@@ -318,6 +318,13 @@ def bundle_response(
                     and observed == generation
                 ),
                 "url": status.get("url"),
+                # docs/AGENT_CONTRACT.md makes status.verification the only
+                # success criterion, and bundles are one of its deployment entry
+                # points. The operator writes this per component exactly as it
+                # does for a standalone deployment; leaving it out of the
+                # projection meant a bundle caller saw phase Running and nothing
+                # else, with no way to reach evidence that already existed.
+                "verification": status.get("verification"),
             }
         )
     # The expected number of components is the currently found group: the control plane does not preset any bundle composition.
