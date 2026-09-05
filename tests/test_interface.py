@@ -1902,6 +1902,45 @@ class DeploymentIntentBoundaryTests(unittest.TestCase):
         self.assertIn("there is no configured public-route capacity limit", sentence)
         self.assertNotIn("None", sentence)
 
+    def test_silent_flag_defaults_are_stated_in_help(self) -> None:
+        """Defaults a caller cannot see must at least be printed.
+
+        `--health-path` is `/` for deploy and deploy-static and `/healthz` for
+        build submit, and none of the three said so. Taking the sibling default
+        on faith produced a build that pushed a correct image and then spent the
+        whole readiness window failing a probe on a path the image does not
+        serve, reported as "Deployment does not have minimum availability" --
+        which points at the workload rather than at the flag.
+        """
+        expected = {
+            ("deploy",): "/",
+            ("deploy-static",): "/",
+            ("build", "submit"): "/healthz",
+        }
+        for path, default in expected.items():
+            with self.subTest(command=" ".join(path)):
+                parser = build_parser()
+                for name in path:
+                    parser = next(
+                        action.choices[name]
+                        for action in parser._subparsers._group_actions
+                        if name in action.choices
+                    )
+                for flag in ("--health-path", "--port"):
+                    action = next(
+                        item for item in parser._actions if flag in item.option_strings
+                    )
+                    self.assertTrue(
+                        action.help, f"{' '.join(path)} {flag} has no help at all"
+                    )
+                    self.assertIn("%(default)s", action.help, flag)
+                health = next(
+                    item
+                    for item in parser._actions
+                    if "--health-path" in item.option_strings
+                )
+                self.assertEqual(health.default, default)
+
 
 if __name__ == "__main__":
     unittest.main()

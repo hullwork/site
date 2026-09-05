@@ -175,7 +175,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1038 tests
+make test        # 1041 tests
 make test-db-down
 ```
 
