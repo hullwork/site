@@ -260,12 +260,6 @@ spec:
     spec:
       serviceAccountName: sites-prometheus
       enableServiceLinks: false
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: ""
-      tolerations:
-        - key: node-role.kubernetes.io/control-plane
-          operator: Exists
-          effect: NoSchedule
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534

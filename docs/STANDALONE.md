@@ -38,6 +38,9 @@ volumes are constrained to worker `w1`, which is retained; the command refuses r
 it detects a local volume on a candidate node. This only scales workers: one control-plane
 is not an HA topology.
 
+The control-plane keeps its kubeadm `NoSchedule` taint. Site, Prometheus, and tenant Pods
+run on workers; the quickstart fails if a Site workload crosses that boundary.
+
 `make quickstart-clean` is intentionally destructive only to the disposable trial: it
 deletes its VMs, repository-owned Lima network, every application inside it, and this
 checkout's local kubeconfig.

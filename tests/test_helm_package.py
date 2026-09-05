@@ -63,6 +63,23 @@ class HelmPackageContractTests(unittest.TestCase):
         expression = storage_class["allowedTopologies"][0]["matchLabelExpressions"][0]
         self.assertEqual(expression["key"], "kubernetes.io/hostname")
         self.assertEqual(expression["values"], ["site-quickstart-w1"])
+        for workload in (
+            item for item in yaml.safe_load_all(rendered)
+            if isinstance(item, dict) and item.get("kind") in {"Deployment", "StatefulSet"}
+        ):
+            pod_spec = workload["spec"]["template"]["spec"]
+            self.assertNotIn(
+                "node-role.kubernetes.io/control-plane",
+                pod_spec.get("nodeSelector", {}),
+                workload["metadata"]["name"],
+            )
+            self.assertFalse(
+                any(
+                    item.get("key") == "node-role.kubernetes.io/control-plane"
+                    for item in pod_spec.get("tolerations", [])
+                ),
+                workload["metadata"]["name"],
+            )
 
     def test_makefile_exposes_the_complete_kubeadm_trial_lifecycle(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

@@ -46,7 +46,8 @@ depending on the network it can take 8–30 minutes and needs ports 18090–1809
 
 The fastest path is deliberately end to end. With the prerequisites above, one command
 creates a disposable Kubernetes cluster with one control-plane and two worker nodes using
-`kubeadm`, builds the image from this checkout, installs Site and Prometheus,
+`kubeadm`, keeps all Site components off the tainted control-plane, builds the image from
+this checkout, installs Site and Prometheus,
 deploys the included HTML example, and refuses to pass until both server-side HTTP
 verification and the administrative observability APIs return real evidence:
 
