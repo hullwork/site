@@ -175,7 +175,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1052 tests
+make test        # 1054 tests
 make test-db-down
 ```
 
@@ -452,11 +452,11 @@ production is worse off than one who reads them here.
 
 **Housekeeping**
 
-- 45 `SITES_*` environment variables are read by `src/sites/` but appear in no document or
-  chart — mostly activator, gateway, NodePort-pool, KEDA, and operator tuning. They have
-  working defaults, and the most useful ones are now listed under
-  [Undocumented tuning variables](docs/CONFIGURATION.md#undocumented-tuning-variables), but
-  the set is not yet complete or schema-validated.
+- `SITES_*` environment variables are still not schema-validated: an invalid value
+  generally raises at import time rather than falling back. Every one `src/sites/` reads is
+  named in a document or the chart — the leftovers are under
+  [Undocumented tuning variables](docs/CONFIGURATION.md#undocumented-tuning-variables) — and
+  a test keeps that true, but "named" is not "validated".
 - `api.py`, `operator.py`, and `storage.py` are large, and environment reads are spread
   across process-owned modules instead of validated once at startup.
 

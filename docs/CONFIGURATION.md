@@ -124,14 +124,15 @@ rather than being guessed at. Helm exposes it as `mcpEndpoint.enabled`.
 
 ## Undocumented tuning variables
 
-45 `SITES_*` variables are read by `src/sites/` but appear in no other document and in no
-Chart template. They all have working defaults, so nothing breaks by leaving them unset;
-they are listed here because "not discoverable" is a different problem from "not
-supported". This is operator/GitOps configuration in the sense of the table above: it is
-read once at process start and a change requires a rollout.
+Every `SITES_*` variable `src/sites/` reads now appears in a document or a Chart template;
+this table holds the ones that appear nowhere else. They all have working defaults, so
+nothing breaks by leaving them unset; they are listed because "not discoverable" is a
+different problem from "not supported". This is operator/GitOps configuration in the sense
+of the table above: it is read once at process start and a change requires a rollout.
 
-The list below is the useful subset, not the complete set. It is not schema-validated,
-and an invalid value generally raises at import time rather than falling back.
+The set is complete and a test keeps it that way, so adding a new `getenv("SITES_...")`
+means adding a row here or naming it in the Chart. It is still not schema-validated, and an
+invalid value generally raises at import time rather than falling back.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -178,6 +179,14 @@ and an invalid value generally raises at import time rather than falling back.
 | `SITES_TENANT_CPU_LIMIT` | `4` | Per-tenant namespace CPU quota. Each site container is capped at `limits.cpu: 1`, so this is also the number of sites one tenant can run at once — independently of, and by default lower than, the tenant's `maxDeployments`. See [README known limitations](../README.md#known-limitations) |
 | `SITES_TENANT_MEMORY_LIMIT` | `4Gi` | Per-tenant namespace memory quota |
 | `SITES_TENANT_POD_LIMIT` | `16` | Per-tenant namespace Pod quota |
+| `SITES_DB_BACKEND` | empty | Rejected unless empty, `postgres`, or `postgresql`; there is no second backend to select |
+| `SITES_BUILDKIT_IMAGE` | pinned `moby/buildkit` rootless digest | Builder image the BuildKit Job runs |
+| `SITES_OSS_DOWNLOADER_IMAGE` | pinned `site-control` release | initContainer that materializes a versioned static artifact |
+| `SITES_REGISTRY_AUTH_SECRET` | `sites-registry-auth` | Secret holding the registry password, htpasswd, and the `config.json` the build Job mounts |
+| `SITES_REGISTRY_AUTH_MOUNT` | `/etc/sites-registry` | Where that Secret is mounted; also the Job's `DOCKER_CONFIG` |
+| `SITES_REGISTRY_PASSWORD_FILE` | `/var/run/sites-registry/password` | File the control plane reads its own registry password from |
+| `SITES_GATEWAY_POD_LABEL_KEY` | `gateway.envoyproxy.io/owning-gateway-name` | Label that identifies this Gateway's data-plane Pods to the tenant NetworkPolicy |
+| `SITES_GATEWAY_POD_LABEL_VALUE` | `SITES_GATEWAY_NAME` | Value for that label |
 
 ## Current cleanup and remaining work
 
