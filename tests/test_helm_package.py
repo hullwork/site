@@ -413,6 +413,32 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn("SITES_HOST_PORT_BASE", adapter)
         self.assertIn("nodePort.hostPortBase", adapter)
 
+    def test_both_install_paths_take_the_same_cluster_facts(self) -> None:
+        """standalone.sh must accept what cluster.sh accepts.
+
+        The two are the repository's install seams and cluster_benchmark.py goes
+        through standalone.sh. That one hardcoded values-dev.yaml, whose
+        clusterNetwork.podCIDR names the reference kubeadm topology, and the
+        operator refuses to start when its own address falls outside it. So the
+        benchmark -- the script whose report invites reproduction -- could only
+        run on a cluster whose Pod network happened to match, and nothing said
+        so: the install succeeds and the operator then refuses.
+        """
+        standalone = (ROOT / "scripts" / "standalone.sh").read_text(encoding="utf-8")
+        adapter = (ROOT / "scripts" / "cluster.sh").read_text(encoding="utf-8")
+        for seam in ("SITES_HELM_VALUES", "SITES_CLUSTER_POD_CIDR"):
+            with self.subTest(seam=seam):
+                self.assertIn(seam, adapter)
+                self.assertIn(seam, standalone)
+        self.assertIn(
+            'values_file=${SITES_HELM_VALUES:-$root/charts/site/values-dev.yaml}',
+            standalone,
+        )
+        self.assertIn(
+            'helm_set+=(--set-string "clusterNetwork.podCIDR=$SITES_CLUSTER_POD_CIDR")',
+            standalone,
+        )
+
     def test_registry_address_follows_the_namespace_it_is_installed_into(self) -> None:
         """The registry Service address must come from namespaces.control.
 
