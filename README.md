@@ -175,7 +175,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1050 tests
+make test        # 1051 tests
 make test-db-down
 ```
 
@@ -236,6 +236,10 @@ sites capabilities
   only 2xx counts, because those are the two facts a tenant cannot forge. The evidence is
   bounded on purpose: it proves something at that address returned 2xx with that body
   digest — not that the body is semantically correct, since the tenant produced it. It is
+  bounded in *place* too: the probe requests the deployment's `healthPath`, and
+  `verification.url` names it. With the default `/` that is the address a person opens; with
+  a health path such as `/healthz` it is not, and a site can be verified while its public URL
+  answers 403. It is
   also bounded in time: the evidence names the `revision` it was collected for and is kept
   when a later revision fails to roll out, so `ok: true` beside `phase: Failed` is last
   time's answer, not this one's. Compare `verification.revision` with the deployment's

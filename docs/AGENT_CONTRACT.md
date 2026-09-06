@@ -50,6 +50,22 @@ completed real HTTP evidence collection. The result also records `httpStatus` an
 `bodySha256`. The public or host entry point is a separate network path: request the
 returned URL from the user side and compare its response digest with `bodySha256`.
 
+**Evidence covers `healthPath`, not the whole site.** The probe requests
+`http://<service>.<namespace>.svc:<port><healthPath>` and writes that exact address into
+`verification.url`. So the digest comparison above is only meaningful when `healthPath` is
+`/`: at any other value the two are different resources and comparing them must fail.
+`sites deploy` and `sites deploy-static` default to `/`, **`sites build submit` defaults to
+`/healthz`**, and a site deployed that way can be `Running`, `ready`, `verification.ok`,
+and hold a public URL that answers `403` — measured, not hypothetical. Before treating the
+evidence as being about the address a person will open, check that the two agree:
+
+```
+verification.url.endswith(healthPath) and healthPath == "/"
+```
+
+Otherwise the evidence says only that the health endpoint answered 2xx with that digest,
+which is exactly what it was collected from.
+
 **Evidence belongs to the revision it names.** `verification.revision` is the revision the
 probe ran against, and it is deliberately kept when a later revision fails to roll out —
 it remains true that *that* revision served traffic. So `ok=true` next to

@@ -1283,6 +1283,41 @@ class CommonTests(unittest.TestCase):
                 )
                 seen[name] = spec_path.name
 
+    def test_evidence_is_collected_from_health_path_and_says_so(self) -> None:
+        """The probe address must be the documented one, and documented as bounded.
+
+        The contract tells a caller to compare the public URL's response digest
+        with `bodySha256`, which only holds while `healthPath` is `/`. Measured:
+        a source build (whose `--health-path` defaults to `/healthz`) came up
+        `Running`, `ready`, `verification.ok=true`, `httpStatus=200`, with a
+        public URL that answered 403 — the probe had asked `/healthz` and the
+        person opens `/`.
+
+        Both halves are pinned because either alone is useless: the URL builder
+        without the caveat is an undocumented trap, and the caveat without the
+        builder is a claim about code that may have moved on.
+        """
+        source = (
+            Path(__file__).resolve().parent.parent / "src" / "sites" / "operator.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('f"{spec[\'healthPath\']}"', source)
+        contract = (
+            Path(__file__).resolve().parent.parent / "docs" / "AGENT_CONTRACT.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Evidence covers `healthPath`, not the whole site", contract)
+        self.assertIn("`sites build submit` defaults to\n`/healthz`", contract)
+
+        # The trial prints "public URL body: matches verification digest" and
+        # hard-fails when they differ, which is only reachable because it takes
+        # the default health path. Passing one would break the trial itself.
+        quickstart = (
+            Path(__file__).resolve().parent.parent
+            / "scripts"
+            / "quickstart-kubeadm.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("public URL body digest", quickstart)
+        self.assertNotIn("--health-path", quickstart)
+
     def test_stale_evidence_stays_and_is_distinguishable_by_revision(self) -> None:
         """A failed rollout keeps the previous revision's passing evidence.
 
