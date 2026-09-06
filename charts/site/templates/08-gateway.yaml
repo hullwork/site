@@ -24,11 +24,12 @@
 # URL of the party. When the three places are allocated separately, the performance of any one place drifting is "the site cannot be accessed" - and three copies
 # The configuration alone is reasonable. When placed in ConfigMap, there is no such state as "only two changes" physically.
 #
-# Change to your own wildcard domain name: change SITES_DOMAIN_SUFFIX below, **at the same time** change Gateway listener
-# hostname (below this file, two places are nailed by GatewayManifestContractTest), and then give
-# `*.<your suffix>` Add a DNS record pointing to the gateway. Domain name goes 80/443 when SITES_GATEWAY_SCHEME
-# and SITES_GATEWAY_HOST_PORT must also be changed accordingly, otherwise the URL returned to the caller will contain local
-# 18090 port.
+# Change to your own wildcard domain name with `gateway.domainSuffix`: it renders both
+# SITES_DOMAIN_SUFFIX below and the Gateway listener's wildcard, so the two cannot be
+# changed apart (they used to be two literals kept together by
+# GatewayManifestContractTest). Point `*.<your suffix>` at the gateway in DNS, and set
+# `gateway.scheme`/`gateway.hostPort` to how the host really answers -- they default to
+# the reference Lima forward, and left alone they hand the caller a URL naming port 18090.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -41,10 +42,10 @@ data:
   # Only when this value is gateway, the site will use the L7 entrance and scaleToZero will be allowed.
   SITES_EXPOSURE_BACKEND: "gateway"
   # Site hostname = <serviceName>-<tenant summary>.<this suffix>.
-  SITES_DOMAIN_SUFFIX: "127.0.0.1.sslip.io"
+  SITES_DOMAIN_SUFFIX: {{ .Values.gateway.domainSuffix | quote }}
 # Host-facing URL scheme and port for the local Lima port forwarding.
-  SITES_GATEWAY_SCHEME: "http"
-  SITES_GATEWAY_HOST_PORT: "18090"
+  SITES_GATEWAY_SCHEME: {{ .Values.gateway.scheme | quote }}
+  SITES_GATEWAY_HOST_PORT: {{ .Values.gateway.hostPort | quote }}
   # The tenant image is in the workload registry, not the CP Registry that hosts the control plane image.
   # The node containerd receives this stable name from the deployment portal to the Registry pull Service.
   SITES_REGISTRY_PULL_HOST: {{ .Values.registry.pullHost | quote }}
@@ -134,9 +135,10 @@ spec:
       # This is especially true for real domain names - `*.*.apps.example.com` is a two-level wildcard that most DNS service providers
       # Not supported. The host_for of sites/exposure.py and this together form the same contract.
       #
-      # When changing to self-built wildcard DNS, change SITES_DOMAIN_SUFFIX and the hostname here. The two must be synchronized.
-      # (GatewayManifestContractTest pinned).
-      hostname: "*.127.0.0.1.sslip.io"
+      # Rendered from gateway.domainSuffix, the same value SITES_DOMAIN_SUFFIX above
+      # takes, so self-built wildcard DNS is one value rather than two edits that
+      # have to be kept in step (GatewayManifestContractTest still checks the pair).
+      hostname: {{ printf "*.%s" .Values.gateway.domainSuffix | quote }}
       allowedRoutes:
         # 🔴 Must be Selector instead of Same: HTTPRoute is built in the **tenant** Namespace,
         # And Gateway is in sites-gateway. Leaving it as the default Same will cause every tenant route to be

@@ -606,6 +606,46 @@ class GatewayManifestContractTest(unittest.TestCase):
         listener = self._doc("Gateway")["spec"]["listeners"][0]
         self.assertEqual(listener["hostname"], f"*.{exposure.DOMAIN_SUFFIX}")
 
+    def test_the_host_facing_url_parts_are_values_not_literals(self) -> None:
+        """A different host must not require editing the template.
+
+        These three decide the URL the caller is handed, and all three were
+        literals: `127.0.0.1.sslip.io`, `http`, and `18090` -- the reference
+        Lima forward, written into every installation's gateway URLs. The
+        suffix was worse than merely hardcoded: it appeared twice, in the
+        ConfigMap and in the listener wildcard, and the file told the operator
+        to change both by hand. One value renders both now, so they cannot be
+        changed apart.
+        """
+        overrides = (
+            "--set-string", "gateway.domainSuffix=apps.example.test",
+            "--set-string", "gateway.scheme=https",
+            "--set", "gateway.hostPort=443",
+        )
+        docs = chart.documents("08-gateway.yaml", *overrides)
+        config = next(
+            doc for doc in docs
+            if doc["kind"] == "ConfigMap" and "SITES_DOMAIN_SUFFIX" in doc["data"]
+        )
+        self.assertEqual(config["data"]["SITES_DOMAIN_SUFFIX"], "apps.example.test")
+        self.assertEqual(config["data"]["SITES_GATEWAY_SCHEME"], "https")
+        self.assertEqual(config["data"]["SITES_GATEWAY_HOST_PORT"], "443")
+        listener = next(
+            doc for doc in docs if doc["kind"] == "Gateway"
+        )["spec"]["listeners"][0]
+        self.assertEqual(listener["hostname"], "*.apps.example.test")
+        # The default render still is what it was, so this is a seam and not a
+        # behaviour change for anyone already on the reference topology.
+        default = next(
+            doc for doc in self._docs()
+            if doc["kind"] == "ConfigMap" and "SITES_DOMAIN_SUFFIX" in doc["data"]
+        )
+        self.assertEqual(default["data"]["SITES_DOMAIN_SUFFIX"], exposure.DOMAIN_SUFFIX)
+        self.assertEqual(
+            default["data"]["SITES_GATEWAY_HOST_PORT"],
+            str(exposure.GATEWAY_HOST_PORT),
+        )
+
     def test_listener_admits_routes_from_tenant_namespaces(self) -> None:
         """Must be a Selector: HTTPRoute is built in tenant ns, and Gateway is in its own ns.
 

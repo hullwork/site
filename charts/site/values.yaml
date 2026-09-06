@@ -108,6 +108,17 @@ gateway:
   serviceType: LoadBalancer
   httpNodePort: null
   metricsNodePort: null
+  # The host-facing half of a gateway URL: what sits between a site's own name
+  # and its path. scheme and hostPort are only what the caller is handed --
+  # routing does not read them -- and default to the reference trial's Lima
+  # forward, so on any other host they are the first two values to set.
+  # domainSuffix is load-bearing: it is both the listener's wildcard and the
+  # hostname the operator writes into every HTTPRoute. One value feeds both, so
+  # changing it cannot leave the two disagreeing; point `*.<suffix>` at the
+  # gateway in DNS before using anything but the sslip.io default.
+  domainSuffix: 127.0.0.1.sslip.io
+  scheme: http
+  hostPort: 18090
 
 # How a browser outside the cluster reaches a site published by the `nodeport`
 # exposure backend. Both keys describe the machine in front of the cluster, not
