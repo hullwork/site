@@ -175,7 +175,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1055 tests
+make test        # 1058 tests
 make test-db-down
 ```
 
@@ -308,8 +308,8 @@ so the reference Deployments intentionally run **one replica each**.
 
 ### Module map
 
-`api.py` is the composition root and combines eight endpoint mixins (auth, tenants,
-merchants, admin, builds, bundles, deployments, sites).
+`api.py` is the composition root and combines nine endpoint mixins (auth, tenants,
+merchants, admin, builds, bundles, deployments, sites, mcp) over the shared HTTP kit.
 
 <details>
 <summary>Per-module responsibilities under <code>src/sites/</code></summary>
@@ -318,7 +318,8 @@ merchants, admin, builds, bundles, deployments, sites).
 |---|---|
 | `api.py` | Composition root: combines mixins, assembles `serve()`, applies exception mappings, owns metric route templates |
 | `api_errors.py` | Ordered exception-to-HTTP mappings shared by mutation endpoints |
-| `api_auth.py`, `api_tenants.py`, `api_merchants.py`, `api_admin.py`, `api_builds.py`, `api_bundles.py`, `api_deployments.py`, `api_sites.py` | The endpoint mixins |
+| `api_auth.py`, `api_tenants.py`, `api_merchants.py`, `api_admin.py`, `api_builds.py`, `api_bundles.py`, `api_deployments.py`, `api_sites.py`, `api_mcp.py` | The endpoint mixins; `api_mcp.py` is the MCP tool surface as `POST /mcp` |
+| `http_kit.py` | JSON and static-file helpers, bounded body reads, route matching, console SPA fallback; no control-plane logic |
 | `identity.py` | Pure authentication: `(headers, store, tokens) → Identity or Refusal` |
 | `admission.py` | Pure admission, quota, and port-allocation logic plus refusal exceptions |
 | `validation.py` | Input validation (`normalize_*`), identity and quota constants, `DEPLOY_FIELDS`, `STATIC_IMAGE` |

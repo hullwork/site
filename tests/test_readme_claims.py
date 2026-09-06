@@ -94,6 +94,66 @@ class ReadmeTestCountTests(unittest.TestCase):
         )
 
 
+class ModuleMapTests(unittest.TestCase):
+    """The per-module table has to still describe this package.
+
+    It listed 43 of 45 modules: `api_mcp.py` -- the `POST /mcp` endpoint, which
+    the README and AGENT_CONTRACT both treat as a headline surface -- and
+    `http_kit.py` were simply absent, and the composition-root sentence counted
+    "eight endpoint mixins" while `Handler` combined nine. A table maintained by
+    hand drifts silently, because nothing about adding a module makes anyone
+    reopen it.
+    """
+
+    TABLE = re.compile(
+        r"\| File under `src/sites/` \| Responsibility \|(?P<body>.+?)</details>",
+        re.S,
+    )
+
+    def setUp(self) -> None:
+        self.text = README.read_text(encoding="utf-8")
+        self.modules = sorted(
+            path.name
+            for path in (REPO_ROOT / "src" / "sites").glob("*.py")
+            if path.name != "__init__.py"
+        )
+
+    def test_the_table_is_where_this_gate_thinks_it_is(self) -> None:
+        self.assertIsNotNone(self.TABLE.search(self.text))
+        self.assertGreater(len(self.modules), 20)
+
+    def test_every_module_appears_in_the_map(self) -> None:
+        body = self.TABLE.search(self.text).group("body")
+        named = set(re.findall(r"`([a-z_0-9]+\.py)`", body))
+        self.assertEqual(
+            sorted(set(self.modules) - named),
+            [],
+            "modules with no row in the README map",
+        )
+        self.assertEqual(
+            sorted(named - set(self.modules)),
+            [],
+            "rows naming files that no longer exist",
+        )
+
+    def test_the_mixin_sentence_names_every_endpoint_mixin(self) -> None:
+        """Derived from the classes, not from a number someone typed."""
+        mixins = sorted(
+            path.stem.removeprefix("api_")
+            for path in (REPO_ROOT / "src" / "sites").glob("api_*.py")
+            if re.search(r"^class \w+Mixin", path.read_text(encoding="utf-8"), re.M)
+        )
+        self.assertIn("mcp", mixins)
+        spelled = {
+            8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
+        }.get(len(mixins))
+        self.assertIsNotNone(spelled, f"add {len(mixins)} to the spelled-out numbers")
+        self.assertIn(f"combines {spelled} endpoint mixins", self.text)
+        for name in mixins:
+            with self.subTest(mixin=name):
+                self.assertRegex(self.text, rf"endpoint mixins \([^)]*\b{name}\b")
+
+
 class EnvironmentVariableDiscoverabilityTests(unittest.TestCase):
     """Every knob the code reads has to be named somewhere a reader looks.
 
