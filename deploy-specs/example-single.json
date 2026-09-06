@@ -1,7 +1,12 @@
 {
-  "name": "example-web",
-  "image": "nginx:1.29-alpine",
-  "port": 80,
-  "healthPath": "/",
-  "exposure": "public"
+  "name": "example-single",
+  "components": [
+    {
+      "name": "single-web",
+      "image": "nginxinc/nginx-unprivileged:1.29-alpine",
+      "port": 8080,
+      "healthPath": "/",
+      "exposure": "public"
+    }
+  ]
 }

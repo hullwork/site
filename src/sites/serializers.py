@@ -318,6 +318,19 @@ def bundle_response(
                     and observed == generation
                 ),
                 "url": status.get("url"),
+                # docs/AGENT_CONTRACT.md makes status.verification the only
+                # success criterion, and bundles are one of its deployment entry
+                # points. The operator writes this per component exactly as it
+                # does for a standalone deployment; leaving it out of the
+                # projection meant a bundle caller saw phase Running and nothing
+                # else, with no way to reach evidence that already existed.
+                "verification": status.get("verification"),
+                # Same omission on the failure side: a component that could not
+                # roll out reported `Failed` and nothing else, while the sentence
+                # naming the cause -- an exhausted tenant quota, an image that
+                # will not pull -- was already on the resource. A standalone
+                # deployment has carried it all along.
+                "message": status.get("message", ""),
             }
         )
     # The expected number of components is the currently found group: the control plane does not preset any bundle composition.

@@ -349,8 +349,14 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 def _add_deploy_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--name", required=True, help="service name")
     parser.add_argument("--image", required=True, help="container image")
-    parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--health-path", default="/")
+    parser.add_argument(
+        "--port", type=int, default=8080,
+        help="container port the workload listens on (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--health-path", default="/",
+        help="readiness and liveness path (default: %(default)s)",
+    )
     parser.add_argument(
         "--liveness-path",
         default="",
@@ -422,7 +428,7 @@ def _add_admin_commands(sub: argparse._SubParsersAction) -> None:
     merchant_create = merchants_sub.add_parser(
         "create",
         help="create a merchant and print its API key once",
-        description="The apiKey plaintext is only returned this time, and only the summary is stored in the library; if it is lost, you can only rotate-key.",
+        description="The plaintext API key is returned only this time; the control plane stores only its digest. A lost key can only be replaced with rotate-key.",
     )
     merchant_create.add_argument("merchant_id")
     merchant_create.add_argument("--display-name", required=True)
@@ -463,7 +469,7 @@ def _add_admin_commands(sub: argparse._SubParsersAction) -> None:
     tenant_create = tenants_sub.add_parser(
         "create",
         help="create a tenant and print its token once",
-        description="The token plaintext is returned only this time, and only the digest is stored in the library. If it is lost, it can only be rotated.",
+        description="The plaintext token is returned only this time; the control plane stores only its digest. A lost token can only be replaced with rotate.",
     )
     tenant_create.add_argument("name")
     tenant_create.add_argument("--merchant", required=True)
@@ -537,8 +543,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     static.add_argument("--name", required=True)
     static.add_argument("--directory", required=True)
-    static.add_argument("--port", type=int, default=8080)
-    static.add_argument("--health-path", default="/")
+    static.add_argument(
+        "--port", type=int, default=8080,
+        help="container port of the fixed static runtime (default: %(default)s)",
+    )
+    static.add_argument(
+        "--health-path", default="/",
+        help="readiness and liveness path (default: %(default)s)",
+    )
     static.add_argument(
         "--exposure", choices=("public", "internal"), default="public"
     )
@@ -563,8 +575,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_submit.add_argument("--name", required=True)
     build_submit.add_argument("--directory", required=True)
-    build_submit.add_argument("--port", type=int, default=8080)
-    build_submit.add_argument("--health-path", default="/healthz")
+    build_submit.add_argument(
+        "--port", type=int, default=8080,
+        help="container port your Dockerfile exposes (default: %(default)s)",
+    )
+    build_submit.add_argument(
+        # Deliberately not `/` like the other two: a source build is an
+        # application the caller wrote, so it is expected to answer a real
+        # health endpoint. Silent, and different from its siblings, that
+        # difference cost a build the full readiness timeout and reported only
+        # "Deployment does not have minimum availability".
+        "--health-path", default="/healthz",
+        help="readiness and liveness path your image serves "
+        "(default: %(default)s, unlike deploy/deploy-static which default to /)",
+    )
     build_status = build_sub.add_parser("status")
     build_status.add_argument("name")
     build_delete = build_sub.add_parser("delete")

@@ -53,6 +53,33 @@ def using_backend(name: str):
             os.environ["SITES_EXPOSURE_BACKEND"] = previous
 
 
+# The one environment that really does forward this host port to NODE_PORT_MIN:
+# the repository's own kubeadm trial, via dev/kubeadm/lima.yaml.
+REFERENCE_HOST_PORT_BASE = "18090"
+
+
+@contextmanager
+def using_host_port_base(base: str | None):
+    """Temporarily declare, or withdraw, this environment's host port mapping.
+
+    exposure.host_port_base() rereads env per call for the same reason backend()
+    does: the mapping belongs to whoever set the host up, so a module constant
+    frozen at import would let the first test decide it for every later one.
+    """
+    previous = os.environ.get("SITES_HOST_PORT_BASE")
+    if base is None:
+        os.environ.pop("SITES_HOST_PORT_BASE", None)
+    else:
+        os.environ["SITES_HOST_PORT_BASE"] = base
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("SITES_HOST_PORT_BASE", None)
+        else:
+            os.environ["SITES_HOST_PORT_BASE"] = previous
+
+
 def _spec(*, merchant=DEFAULT_MERCHANT_ID, user="local", **overrides):
     payload = {
         "name": "demo",
@@ -579,6 +606,85 @@ class GatewayManifestContractTest(unittest.TestCase):
         listener = self._doc("Gateway")["spec"]["listeners"][0]
         self.assertEqual(listener["hostname"], f"*.{exposure.DOMAIN_SUFFIX}")
 
+    def test_the_gateway_identity_survives_a_non_default_namespace(self) -> None:
+        """The control plane must be told which Gateway the Chart made.
+
+        The Gateway object is named after `namespaces.gateway`, while
+        `SITES_GATEWAY_NAME` and `SITES_GATEWAY_NAMESPACE` defaulted to the
+        literal `sites-gateway` and the Chart never set them. They agreed only
+        when the release happened to live in a namespace of that name -- and
+        both install scripts set `namespaces.gateway` to the release namespace,
+        which defaults to `sites-local`.
+
+        Measured on a real cluster before the fix: every HTTPRoute carried
+        `parentRef: sites-gateway/sites-gateway`, no Gateway claimed it (the
+        route had no parent status at all), the tenant NetworkPolicy admitted a
+        data-plane Pod label nothing carried, and the site was `Running` with
+        `verification.ok` while its public URL answered 404. After: route
+        Accepted=True, policy label `sites-gw`, URL 200 with the verified digest.
+
+        The existing identity test above renders the defaults, where both sides
+        read `sites-gateway` and agree no matter what the Chart does; this one
+        has to use a different namespace or it asserts nothing.
+        """
+        overrides = ("--set-string", "namespaces.gateway=elsewhere-gw")
+        docs = chart.documents("08-gateway.yaml", *overrides)
+        gateway = next(doc for doc in docs if doc["kind"] == "Gateway")
+        config = next(
+            doc for doc in docs
+            if doc["kind"] == "ConfigMap" and "SITES_GATEWAY_NAME" in doc["data"]
+        )
+        self.assertEqual(gateway["metadata"]["name"], "elsewhere-gw")
+        self.assertEqual(config["data"]["SITES_GATEWAY_NAME"], "elsewhere-gw")
+        self.assertEqual(config["data"]["SITES_GATEWAY_NAMESPACE"], "elsewhere-gw")
+        self.assertEqual(
+            config["data"]["SITES_GATEWAY_NAME"], gateway["metadata"]["name"]
+        )
+        self.assertEqual(
+            config["data"]["SITES_GATEWAY_NAMESPACE"],
+            gateway["metadata"]["namespace"],
+        )
+
+    def test_the_host_facing_url_parts_are_values_not_literals(self) -> None:
+        """A different host must not require editing the template.
+
+        These three decide the URL the caller is handed, and all three were
+        literals: `127.0.0.1.sslip.io`, `http`, and `18090` -- the reference
+        Lima forward, written into every installation's gateway URLs. The
+        suffix was worse than merely hardcoded: it appeared twice, in the
+        ConfigMap and in the listener wildcard, and the file told the operator
+        to change both by hand. One value renders both now, so they cannot be
+        changed apart.
+        """
+        overrides = (
+            "--set-string", "gateway.domainSuffix=apps.example.test",
+            "--set-string", "gateway.scheme=https",
+            "--set", "gateway.hostPort=443",
+        )
+        docs = chart.documents("08-gateway.yaml", *overrides)
+        config = next(
+            doc for doc in docs
+            if doc["kind"] == "ConfigMap" and "SITES_DOMAIN_SUFFIX" in doc["data"]
+        )
+        self.assertEqual(config["data"]["SITES_DOMAIN_SUFFIX"], "apps.example.test")
+        self.assertEqual(config["data"]["SITES_GATEWAY_SCHEME"], "https")
+        self.assertEqual(config["data"]["SITES_GATEWAY_HOST_PORT"], "443")
+        listener = next(
+            doc for doc in docs if doc["kind"] == "Gateway"
+        )["spec"]["listeners"][0]
+        self.assertEqual(listener["hostname"], "*.apps.example.test")
+        # The default render still is what it was, so this is a seam and not a
+        # behaviour change for anyone already on the reference topology.
+        default = next(
+            doc for doc in self._docs()
+            if doc["kind"] == "ConfigMap" and "SITES_DOMAIN_SUFFIX" in doc["data"]
+        )
+        self.assertEqual(default["data"]["SITES_DOMAIN_SUFFIX"], exposure.DOMAIN_SUFFIX)
+        self.assertEqual(
+            default["data"]["SITES_GATEWAY_HOST_PORT"],
+            str(exposure.GATEWAY_HOST_PORT),
+        )
+
     def test_listener_admits_routes_from_tenant_namespaces(self) -> None:
         """Must be a Selector: HTTPRoute is built in tenant ns, and Gateway is in its own ns.
 
@@ -685,11 +791,27 @@ class SingleReplicaInvariantTest(unittest.TestCase):
 
 class PublicUrlTest(unittest.TestCase):
     def test_nodeport_url_is_host_plus_mapped_port(self) -> None:
-        with using_backend("nodeport"):
+        with using_backend("nodeport"), using_host_port_base(
+            REFERENCE_HOST_PORT_BASE
+        ):
             url = public_url_for_spec(_spec())
         self.assertEqual(
-            url, f"{exposure.PUBLIC_URL_HOST}:{exposure.HOST_PORT_BASE}"
+            url, f"{exposure.PUBLIC_URL_HOST}:{REFERENCE_HOST_PORT_BASE}"
         )
+
+    def test_nodeport_url_is_absent_when_no_host_mapping_is_declared(self) -> None:
+        """No declared mapping must yield no URL, not the reference one.
+
+        The offset formula describes a host that really does forward 18090.. to
+        30080.., which the trial does and an arbitrary cluster does not. While
+        18090 was the default, every other installation was handed a URL naming
+        whatever else owned that host port, and nothing could tell it from a
+        working one: server-side verification passes either way because it probes
+        the in-cluster address, so the failure only ever surfaced as a user
+        clicking Open and getting nothing.
+        """
+        with using_backend("nodeport"), using_host_port_base(None):
+            self.assertIsNone(public_url_for_spec(_spec()))
 
     def test_gateway_url_is_a_hostname_not_a_port_offset(self) -> None:
         with using_backend("gateway"):

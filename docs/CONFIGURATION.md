@@ -124,14 +124,15 @@ rather than being guessed at. Helm exposes it as `mcpEndpoint.enabled`.
 
 ## Undocumented tuning variables
 
-45 `SITES_*` variables are read by `src/sites/` but appear in no other document and in no
-Chart template. They all have working defaults, so nothing breaks by leaving them unset;
-they are listed here because "not discoverable" is a different problem from "not
-supported". This is operator/GitOps configuration in the sense of the table above: it is
-read once at process start and a change requires a rollout.
+Every `SITES_*` variable `src/sites/` reads now appears in a document or a Chart template;
+this table holds the ones that appear nowhere else. They all have working defaults, so
+nothing breaks by leaving them unset; they are listed because "not discoverable" is a
+different problem from "not supported". This is operator/GitOps configuration in the sense
+of the table above: it is read once at process start and a change requires a rollout.
 
-The list below is the useful subset, not the complete set. It is not schema-validated,
-and an invalid value generally raises at import time rather than falling back.
+The set is complete and a test keeps it that way, so adding a new `getenv("SITES_...")`
+means adding a row here or naming it in the Chart. It is still not schema-validated, and an
+invalid value generally raises at import time rather than falling back.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -169,14 +170,23 @@ and an invalid value generally raises at import time rather than falling back.
 | `SITES_GATEWAY_NODE_PORT` | `30080` | NodePort the gateway listener is published on |
 | `SITES_NODE_PORT_MIN` / `SITES_NODE_PORT_MAX` | `30080` / `30088` | Allocation pool for the `nodeport` exposure backend |
 | `SITES_NODE_PORT_EXCLUDED` | `30081` | Ports removed from that pool |
-| `SITES_HOST_PORT_BASE` | `18090` | Base host port used by the local reference topology |
+| `SITES_HOST_PORT_BASE` | unset | Host port this environment forwards `SITES_NODE_PORT_MIN` to. Unset means no such forward exists and a `nodeport` deployment reports no public URL rather than guessing one; the Chart sets it from `nodePort.hostPortBase`, which only the kubeadm trial declares |
+| `SITES_PUBLIC_URL_HOST` | `http://127.0.0.1` | Scheme and host those forwards answer on; the Chart sets it from `nodePort.publicUrlHost` |
 | `SITES_SOURCE_PVC` | `sites-sources` | PVC that holds source packages when `SITES_SOURCE_BACKEND=pvc` |
 | `SITES_SOURCE_ROOT` | `/var/lib/sites/sources` | Mount path for that PVC |
 | `SITES_OSS_AUTH_SECRET` | `sites-oss-auth` | Secret holding object-storage credentials |
 | `SITES_OSS_AUTH_MOUNT` | `/var/run/sites-oss` | Where that Secret is mounted |
-| `SITES_TENANT_CPU_LIMIT` | `4` | Per-tenant namespace CPU quota |
+| `SITES_TENANT_CPU_LIMIT` | `4` | Per-tenant namespace CPU quota. Each site container is capped at `limits.cpu: 1`, so this is also the number of sites one tenant can run at once — independently of, and by default lower than, the tenant's `maxDeployments`. See [README known limitations](../README.md#known-limitations) |
 | `SITES_TENANT_MEMORY_LIMIT` | `4Gi` | Per-tenant namespace memory quota |
 | `SITES_TENANT_POD_LIMIT` | `16` | Per-tenant namespace Pod quota |
+| `SITES_DB_BACKEND` | empty | Rejected unless empty, `postgres`, or `postgresql`; there is no second backend to select |
+| `SITES_BUILDKIT_IMAGE` | pinned `moby/buildkit` rootless digest | Builder image the BuildKit Job runs |
+| `SITES_OSS_DOWNLOADER_IMAGE` | pinned `site-control` release | initContainer that materializes a versioned static artifact |
+| `SITES_REGISTRY_AUTH_SECRET` | `sites-registry-auth` | Secret holding the registry password, htpasswd, and the `config.json` the build Job mounts |
+| `SITES_REGISTRY_AUTH_MOUNT` | `/etc/sites-registry` | Where that Secret is mounted; also the Job's `DOCKER_CONFIG` |
+| `SITES_REGISTRY_PASSWORD_FILE` | `/var/run/sites-registry/password` | File the control plane reads its own registry password from |
+| `SITES_GATEWAY_POD_LABEL_KEY` | `gateway.envoyproxy.io/owning-gateway-name` | Label that identifies this Gateway's data-plane Pods to the tenant NetworkPolicy |
+| `SITES_GATEWAY_POD_LABEL_VALUE` | `SITES_GATEWAY_NAME` | Value for that label |
 
 ## Current cleanup and remaining work
 

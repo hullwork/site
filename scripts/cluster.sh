@@ -24,6 +24,11 @@ Standard inputs:
   SITES_CLUSTER_POD_CIDR         Actual cluster Pod CIDR; overrides the values file.
   SITES_LOCAL_PATH_PROVISIONER_ENABLED
                                  true/false; set false when the cluster already has one.
+  SITES_HOST_PORT_BASE           Host port this environment forwards the NodePort
+                                 pool's first port to. Unset means no such forward
+                                 exists and a public deployment reports no URL.
+  SITES_PUBLIC_URL_HOST          Scheme and host those forwards answer on
+                                 (default http://127.0.0.1).
   SITES_CONTROL_IMAGE_REPOSITORY Optional pre-published control image repository.
   SITES_CONTROL_IMAGE_TAG        Optional control image tag.
   SITES_CONTROL_IMAGE_DIGEST     Optional immutable sha256 digest.
@@ -72,6 +77,16 @@ if [[ -n "${SITES_LOCAL_PATH_PROVISIONER_ENABLED:-}" ]]; then
       ;;
   esac
   cluster_args+=(--set "localPathProvisioner.enabled=$SITES_LOCAL_PATH_PROVISIONER_ENABLED")
+fi
+if [[ -n "${SITES_HOST_PORT_BASE:-}" ]]; then
+  [[ "$SITES_HOST_PORT_BASE" =~ ^[0-9]{1,5}$ ]] || {
+    printf 'SITES_HOST_PORT_BASE must be a port number\n' >&2
+    exit 2
+  }
+  cluster_args+=(--set-string "nodePort.hostPortBase=$SITES_HOST_PORT_BASE")
+fi
+if [[ -n "${SITES_PUBLIC_URL_HOST:-}" ]]; then
+  cluster_args+=(--set-string "nodePort.publicUrlHost=$SITES_PUBLIC_URL_HOST")
 fi
 if [[ -n "${SITES_CONTROL_IMAGE_TAG:-}" ]]; then
   image_args+=(--set "images.control.tag=$SITES_CONTROL_IMAGE_TAG")

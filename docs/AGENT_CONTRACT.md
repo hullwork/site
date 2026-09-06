@@ -50,6 +50,38 @@ completed real HTTP evidence collection. The result also records `httpStatus` an
 `bodySha256`. The public or host entry point is a separate network path: request the
 returned URL from the user side and compare its response digest with `bodySha256`.
 
+**Evidence covers `healthPath`, not the whole site.** The probe requests
+`http://<service>.<namespace>.svc:<port><healthPath>` and writes that exact address into
+`verification.url`. So the digest comparison above is only meaningful when `healthPath` is
+`/`: at any other value the two are different resources and comparing them must fail.
+`sites deploy` and `sites deploy-static` default to `/`, **`sites build submit` defaults to
+`/healthz`**, and a site deployed that way can be `Running`, `ready`, `verification.ok`,
+and hold a public URL that answers `403` — measured, not hypothetical. Before treating the
+evidence as being about the address a person will open, check that the two agree:
+
+```
+verification.url.endswith(healthPath) and healthPath == "/"
+```
+
+Otherwise the evidence says only that the health endpoint answered 2xx with that digest,
+which is exactly what it was collected from.
+
+**Evidence belongs to the revision it names.** `verification.revision` is the revision the
+probe ran against, and it is deliberately kept when a later revision fails to roll out —
+it remains true that *that* revision served traffic. So `ok=true` next to
+`phase: Failed` is not a contradiction and is not success: it is last time's answer. A
+caller that reads `ok` alone will report a rollout that never came up as a live site.
+Accept a deployment only when **all** of these hold:
+
+```
+phase == "Running"  and  ready == true
+  and verification.ok == true
+  and verification.revision == revision      # the top-level revision of the same response
+```
+
+Both fields are in every `sites status` and `GET /v1/deployments/{name}` response, so the
+comparison needs no extra call.
+
 ## Identity
 
 **[AUTH.md](AUTH.md) is the contract.** It is written for any client,
@@ -164,6 +196,50 @@ X-Acting-Subject: <HMAC-SHA256(salt, tenantId + "\0" + subjectId)[:16] as 32 low
 
 See [AUTH.md §4](AUTH.md) for the derivation and `docs/acting-subject-vectors.json` for
 test vectors. The salt belongs to the agent host and never crosses the boundary.
+
+#### The deployment authorization an agent host must inject
+
+The configuration above is enough for every read tool. The six write tools —
+`deploy_static`, `deploy_static_versioned`, `deploy_image`, `deploy_dynamic`,
+`deploy_bundle`, `source_deploy` — additionally refuse with
+`deployment_authorization_required` unless the call carries a reserved
+`_agent_deployment_authorization` argument. It is described above as the calling
+runtime's artifact; this is its shape, because a host cannot implement it otherwise:
+
+```json
+{
+  "_agent_deployment_authorization": {
+    "version": 1,
+    "runId": "the host's identifier for this run",
+    "nonce": "at least 24 characters, unguessable, fresh per run",
+    "expiresAt": 1788632704.0,
+    "allowInternal": false
+  }
+}
+```
+
+| Field | Rule |
+|---|---|
+| `version` | Must be exactly `1`. Anything else is refused, not upgraded. |
+| `runId` | String, 1–128 characters. |
+| `nonce` | String, at least 24 characters. |
+| `expiresAt` | Seconds since the epoch, strictly in the future when the call arrives. |
+| `allowInternal` | Only `true` authorizes `exposure: "internal"`; otherwise that value is refused so a model cannot quietly turn a request for a public URL into a site with no URL. |
+
+Three rules make it worth having at all, and dropping any one of them turns it back
+into text the model can write for itself:
+
+- The host issues it **from the user's original request**, before the model runs.
+- The host **strips every reserved argument the model supplied** and then injects
+  its own. A model-provided value must never survive.
+- It is deliberately **absent from every `tools/list` schema**, so the model is not
+  told that a field capable of authorizing a deployment exists.
+
+It authorizes nothing on the Sites side: without a valid Sites credential the request
+is refused before this argument is read, and with one it grants no capability the
+credential does not already have. `deploymentIntent` — the verbatim excerpt of the
+user's request — is validated only after the authorization is accepted, because on its
+own it is model-supplied text.
 
 ### stdio MCP (local development and the CLI)
 

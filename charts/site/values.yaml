@@ -108,6 +108,31 @@ gateway:
   serviceType: LoadBalancer
   httpNodePort: null
   metricsNodePort: null
+  # The host-facing half of a gateway URL: what sits between a site's own name
+  # and its path. scheme and hostPort are only what the caller is handed --
+  # routing does not read them -- and default to the reference trial's Lima
+  # forward, so on any other host they are the first two values to set.
+  # domainSuffix is load-bearing: it is both the listener's wildcard and the
+  # hostname the operator writes into every HTTPRoute. One value feeds both, so
+  # changing it cannot leave the two disagreeing; point `*.<suffix>` at the
+  # gateway in DNS before using anything but the sslip.io default.
+  domainSuffix: 127.0.0.1.sslip.io
+  scheme: http
+  hostPort: 18090
+
+# How a browser outside the cluster reaches a site published by the `nodeport`
+# exposure backend. Both keys describe the machine in front of the cluster, not
+# the cluster, so hostPortBase has no default for the same reason
+# clusterNetwork.podCIDR has none: a wrong one is not visibly wrong. The
+# reference kubeadm trial owns a relay that forwards guest 30080..30088 to host
+# 18090..18098 and therefore declares hostPortBase: 18090. Where no such mapping
+# exists, leaving it empty makes a public deployment report no URL, instead of
+# one assembled from a host port that something unrelated may be serving.
+# Server-side verification is unaffected either way: it uses the in-cluster
+# address and remains the evidence that the site serves traffic.
+nodePort:
+  publicUrlHost: http://127.0.0.1
+  hostPortBase: ""
 
 monitoring:
   enabled: false

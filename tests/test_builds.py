@@ -214,6 +214,54 @@ class BuildJobContractTests(unittest.TestCase):
         self.assertEqual(job["spec"]["backoffLimit"], 0)
         self.assertEqual(job["spec"]["activeDeadlineSeconds"], 300)
 
+    def test_every_secret_key_the_job_mounts_is_one_the_bootstrap_creates(self) -> None:
+        """Nothing may mount a Secret key no supported path ever writes.
+
+        The Job selects `config.json` out of sites-registry-auth, and the
+        bootstrap helper created only `password` and `htpasswd`. A missing
+        selected key is not a soft failure: kubelet refuses to set the volume
+        up, so the Pod never starts and the Job simply runs out its deadline.
+        The caller's only signal was "Job was active longer than specified
+        deadline" five minutes later, which names neither the Secret nor the
+        key, and the whole source-build entry point was dead on every
+        installation that followed this repository's own instructions.
+        """
+        root = Path(__file__).resolve().parent.parent
+        bootstrap = (root / "scripts" / "bootstrap-standalone-secrets.sh").read_text(
+            encoding="utf-8"
+        )
+        pod = build_job_resource(_build(), namespace="sites-local")["spec"][
+            "template"
+        ]["spec"]
+        selected: list[tuple[str, str]] = []
+        for volume in pod["volumes"]:
+            secret = volume.get("secret") or {}
+            for item in secret.get("items") or []:
+                selected.append((secret["secretName"], item["key"]))
+        self.assertIn(("sites-registry-auth", "config.json"), selected)
+        required = next(
+            line
+            for line in bootstrap.splitlines()
+            if 'require_existing_keys "$registry_secret"' in line
+        )
+        for secret_name, key in selected:
+            with self.subTest(secret=secret_name, key=key):
+                self.assertIn(
+                    f"--from-file={key}=",
+                    bootstrap,
+                    f"{secret_name} key {key!r} is mounted but never created",
+                )
+                # An installation from before this key existed keeps its Secret,
+                # so a fresh-install-only fix would leave it in the same silent
+                # failure. Listing the key here makes the rerun say which key is
+                # missing instead of leaving it to the build deadline.
+                self.assertIn(
+                    key,
+                    required,
+                    f"an existing {secret_name} missing {key!r} must be refused, "
+                    "not left to fail as a build deadline",
+                )
+
     def test_job_reports_its_own_digest_onto_the_build_volume(self) -> None:
         build = _build()
         container = build_job_resource(build, namespace="sites-local")[

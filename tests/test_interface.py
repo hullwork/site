@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import os
 import tempfile
 import threading
@@ -1796,6 +1797,75 @@ class DeployContractTests(unittest.TestCase):
 
 
 class DeploymentIntentBoundaryTests(unittest.TestCase):
+    def test_the_authorization_an_agent_host_must_inject_is_documented(self) -> None:
+        """A host cannot implement an object whose shape is written nowhere.
+
+        Every MCP write tool refuses without `_agent_deployment_authorization`,
+        and the argument is deliberately kept out of `tools/list` so the model
+        never learns it exists. That leaves the document as the only place a
+        host integrator can read it. Following AGENT_CONTRACT's own client
+        configuration, the whole write surface answered
+        `deployment_authorization_required` and the message names nothing to
+        implement.
+
+        Each field is checked against the validator rather than a copy of it, so
+        the table cannot drift away from what is actually enforced.
+        """
+        from sites import mcp as sites_mcp
+
+        contract = (
+            Path(__file__).resolve().parent.parent / "docs" / "AGENT_CONTRACT.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(sites_mcp.DEPLOYMENT_AUTHORIZATION_ARGUMENT, contract)
+        for field in ("version", "runId", "nonce", "expiresAt", "allowInternal"):
+            with self.subTest(field=field):
+                self.assertIn(f"`{field}`", contract)
+
+        valid = {
+            "version": 1,
+            "runId": "run-1",
+            "nonce": "n" * 24,
+            "expiresAt": time.time() + 60,
+        }
+        base = {
+            "deploymentIntent": "publish this and give me the URL",
+            sites_mcp.DEPLOYMENT_AUTHORIZATION_ARGUMENT: valid,
+        }
+        self.assertEqual(
+            sites_mcp._require_deployment_intent(base),
+            "publish this and give me the URL",
+        )
+        # Each documented rule must be the reason a call is refused when broken.
+        for field, broken in (
+            ("version", 2),
+            ("runId", ""),
+            ("nonce", "n" * 23),
+            ("expiresAt", time.time() - 1),
+        ):
+            with self.subTest(broken=field):
+                arguments = dict(base)
+                arguments[sites_mcp.DEPLOYMENT_AUTHORIZATION_ARGUMENT] = {
+                    **valid,
+                    field: broken,
+                }
+                with self.assertRaises(sites_mcp.ValidationError) as caught:
+                    sites_mcp._require_deployment_intent(arguments)
+                self.assertIn("deployment_authorization_required", str(caught.exception))
+        # allowInternal is what the table says it is: absent means internal is refused.
+        with self.assertRaises(sites_mcp.ValidationError):
+            sites_mcp._require_standalone_exposure_authorization(
+                {**base, "exposure": "internal"}
+            )
+        sites_mcp._require_standalone_exposure_authorization(
+            {
+                "exposure": "internal",
+                sites_mcp.DEPLOYMENT_AUTHORIZATION_ARGUMENT: {
+                    **valid,
+                    "allowInternal": True,
+                },
+            }
+        )
+
     def test_preview_only_intent_is_rejected_before_dispatch(self) -> None:
         from sites import mcp as sites_mcp
 
@@ -1901,6 +1971,81 @@ class DeploymentIntentBoundaryTests(unittest.TestCase):
         })
         self.assertIn("there is no configured public-route capacity limit", sentence)
         self.assertNotIn("None", sentence)
+
+
+class CliHelpContractTests(unittest.TestCase):
+    """What `--help` promises, since nothing else ever executes it."""
+
+    def test_admin_help_only_names_commands_that_exist(self) -> None:
+        """Help that tells the reader what to run next must name a real command.
+
+        Both `create` descriptions end by saying how to replace a lost
+        credential, and the two groups spell that differently -- merchants use
+        `rotate-key`, tenants use `rotate`. Text like this is never executed, so
+        a wrong name here is only found by someone typing it and getting
+        `invalid choice`.
+        """
+        parser = build_parser()
+        admin = next(
+            action.choices["admin"]
+            for action in parser._subparsers._group_actions
+            if "admin" in action.choices
+        )
+        groups = next(
+            action.choices for action in admin._subparsers._group_actions
+        )
+        for group_name, expected in (("merchants", "rotate-key"), ("tenants", "rotate")):
+            with self.subTest(group=group_name):
+                commands = next(
+                    action.choices
+                    for action in groups[group_name]._subparsers._group_actions
+                )
+                self.assertIn(expected, commands)
+                description = commands["create"].description or ""
+                # Whole tokens, not a substring search: "rotate" is a prefix of
+                # "rotate-token", so `in` would accept the name this group does
+                # not have.
+                named = set(re.findall(r"rotate[a-z-]*", description))
+                self.assertEqual(named, {expected}, description)
+
+    def test_silent_flag_defaults_are_stated_in_help(self) -> None:
+        """Defaults a caller cannot see must at least be printed.
+
+        `--health-path` is `/` for deploy and deploy-static and `/healthz` for
+        build submit, and none of the three said so. Taking the sibling default
+        on faith produced a build that pushed a correct image and then spent the
+        whole readiness window failing a probe on a path the image does not
+        serve, reported as "Deployment does not have minimum availability" --
+        which points at the workload rather than at the flag.
+        """
+        expected = {
+            ("deploy",): "/",
+            ("deploy-static",): "/",
+            ("build", "submit"): "/healthz",
+        }
+        for path, default in expected.items():
+            with self.subTest(command=" ".join(path)):
+                parser = build_parser()
+                for name in path:
+                    parser = next(
+                        action.choices[name]
+                        for action in parser._subparsers._group_actions
+                        if name in action.choices
+                    )
+                for flag in ("--health-path", "--port"):
+                    action = next(
+                        item for item in parser._actions if flag in item.option_strings
+                    )
+                    self.assertTrue(
+                        action.help, f"{' '.join(path)} {flag} has no help at all"
+                    )
+                    self.assertIn("%(default)s", action.help, flag)
+                health = next(
+                    item
+                    for item in parser._actions
+                    if "--health-path" in item.option_strings
+                )
+                self.assertEqual(health.default, default)
 
 
 if __name__ == "__main__":

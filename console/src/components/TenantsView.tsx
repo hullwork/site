@@ -246,7 +246,7 @@ export default function TenantsView({
               <span>{t("Tenant ID")}</span>
               <input
                 value={draftUser}
-                placeholder={t("The only one in the merchant")}
+                placeholder={t("Unique within the merchant")}
                 onChange={(event) => setDraftUser(event.target.value)}
               />
             </label>

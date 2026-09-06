@@ -26,12 +26,12 @@ environments, not a public hosting platform — [Known limitations](#known-limit
 The supported source-checkout trial runs on macOS or Linux with hardware virtualization,
 outbound HTTPS, and enough capacity for three Lima VMs configured with **8 CPUs, 10 GiB
 RAM, and 70 GiB of sparse disk in total**. Install Git, Lima, Docker, `kubectl`, Helm, `curl`, `uv`,
-`lsof`, and Python 3.12+. Docker must be running, not merely installed.
+and Python 3.12+. Docker must be running, not merely installed.
 
 On macOS with Homebrew, the command-line dependencies are:
 
 ```bash
-brew install git lima kubectl helm uv python lsof
+brew install git lima kubectl helm uv python
 brew install --cask docker
 open -a Docker                    # wait until Docker reports that it is running
 ```
@@ -175,7 +175,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1031 tests
+make test        # 1060 tests
 make test-db-down
 ```
 
@@ -208,6 +208,14 @@ SITES_LOCAL_PATH_PROVISIONER_ENABLED=false \
 scripts/cluster.sh up
 ```
 
+A public deployment on such a cluster reports **no URL** until you say how the outside
+reaches it. The `nodeport` backend puts each site on one node port from 30080–30088; only
+the kubeadm trial above also forwards those to host ports 18090–18098, so nothing else can
+be assumed. Add `SITES_HOST_PORT_BASE` (and `SITES_PUBLIC_URL_HOST` when the forwards do
+not answer on `http://127.0.0.1`) once such a forward exists. Server-side verification is
+independent of this: it probes the in-cluster address, so `status.verification` is evidence
+the site serves traffic whether or not a public URL is declared.
+
 The bootstrap helper generates credentials into a mode-0700 temporary directory and never
 writes them into the repository or a values file. **Do not use it for production.** For
 the lower-level Helm lifecycle and production Secret contract, see
@@ -227,7 +235,16 @@ sites capabilities
   `bodySha256` from a request the control plane made itself. Redirects are not followed and
   only 2xx counts, because those are the two facts a tenant cannot forge. The evidence is
   bounded on purpose: it proves something at that address returned 2xx with that body
-  digest — not that the body is semantically correct, since the tenant produced it.
+  digest — not that the body is semantically correct, since the tenant produced it. It is
+  bounded in *place* too: the probe requests the deployment's `healthPath`, and
+  `verification.url` names it. With the default `/` that is the address a person opens; with
+  a health path such as `/healthz` it is not, and a site can be verified while its public URL
+  answers 403. It is
+  also bounded in time: the evidence names the `revision` it was collected for and is kept
+  when a later revision fails to roll out, so `ok: true` beside `phase: Failed` is last
+  time's answer, not this one's. Compare `verification.revision` with the deployment's
+  `revision` — [docs/AGENT_CONTRACT.md](docs/AGENT_CONTRACT.md#success-criteria) states the
+  full acceptance rule.
 - **The caller cannot name the tenancy it writes into.** Identity is a `(merchant, tenant)`
   pair decided entirely by the credential. `X-Merchant-ID` and `X-User-ID` are **refused
   with 403**, not ignored, so a misconfigured client fails loudly instead of quietly
@@ -291,8 +308,8 @@ so the reference Deployments intentionally run **one replica each**.
 
 ### Module map
 
-`api.py` is the composition root and combines eight endpoint mixins (auth, tenants,
-merchants, admin, builds, bundles, deployments, sites).
+`api.py` is the composition root and combines nine endpoint mixins (auth, tenants,
+merchants, admin, builds, bundles, deployments, sites, mcp) over the shared HTTP kit.
 
 <details>
 <summary>Per-module responsibilities under <code>src/sites/</code></summary>
@@ -301,7 +318,8 @@ merchants, admin, builds, bundles, deployments, sites).
 |---|---|
 | `api.py` | Composition root: combines mixins, assembles `serve()`, applies exception mappings, owns metric route templates |
 | `api_errors.py` | Ordered exception-to-HTTP mappings shared by mutation endpoints |
-| `api_auth.py`, `api_tenants.py`, `api_merchants.py`, `api_admin.py`, `api_builds.py`, `api_bundles.py`, `api_deployments.py`, `api_sites.py` | The endpoint mixins |
+| `api_auth.py`, `api_tenants.py`, `api_merchants.py`, `api_admin.py`, `api_builds.py`, `api_bundles.py`, `api_deployments.py`, `api_sites.py`, `api_mcp.py` | The endpoint mixins; `api_mcp.py` is the MCP tool surface as `POST /mcp` |
+| `http_kit.py` | JSON and static-file helpers, bounded body reads, route matching, console SPA fallback; no control-plane logic |
 | `identity.py` | Pure authentication: `(headers, store, tokens) → Identity or Refusal` |
 | `admission.py` | Pure admission, quota, and port-allocation logic plus refusal exceptions |
 | `validation.py` | Input validation (`normalize_*`), identity and quota constants, `DEPLOY_FIELDS`, `STATIC_IMAGE` |
@@ -401,6 +419,13 @@ production is worse off than one who reads them here.
   the reference Chart. Admission uses a process-local lock and reconciliation has no leader
   election, so scaling past one replica requires distributed admission and leader election
   first.
+- **Two tenant limits disagree, and only one of them refuses at submission time.** Admission
+  counts deployments against `maxDeployments` (default 10) and answers `429 quota_exceeded`.
+  The tenant namespace also carries a `ResourceQuota` of `SITES_TENANT_CPU_LIMIT` (default 4)
+  against a fixed `limits.cpu: 1` per site, so a tenant can run **4** sites at once. Numbers
+  5 through 10 are accepted with a 200 and then fail to roll out. The refusal now names the
+  exhausted quota rather than only reporting a readiness timeout, but the two numbers are
+  still set independently.
 - `sync_once()` holds the API's mutation lock across a Kubernetes `GET`. The Kubernetes
   client timeout (10s) and the mutation-lock acquire timeout (`SITES_MUTATION_LOCK_TIMEOUT`,
   10s) are the same order of magnitude, so a slow apiserver can make write paths return
@@ -428,14 +453,11 @@ production is worse off than one who reads them here.
 
 **Housekeeping**
 
-- **Historical UIDs remain in the Git history.** The working tree is clean, but publishing
-  with history attached does not clear them; a `git filter-repo` pass is required before the
-  repository is made public.
-- 45 `SITES_*` environment variables are read by `src/sites/` but appear in no document or
-  chart — mostly activator, gateway, NodePort-pool, KEDA, and operator tuning. They have
-  working defaults, and the most useful ones are now listed under
-  [Undocumented tuning variables](docs/CONFIGURATION.md#undocumented-tuning-variables), but
-  the set is not yet complete or schema-validated.
+- `SITES_*` environment variables are still not schema-validated: an invalid value
+  generally raises at import time rather than falling back. Every one `src/sites/` reads is
+  named in a document or the chart — the leftovers are under
+  [Undocumented tuning variables](docs/CONFIGURATION.md#undocumented-tuning-variables) — and
+  a test keeps that true, but "named" is not "validated".
 - `api.py`, `operator.py`, and `storage.py` are large, and environment reads are spread
   across process-owned modules instead of validated once at startup.
 

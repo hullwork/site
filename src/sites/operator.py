@@ -342,14 +342,31 @@ def _rollout_stall_reason(
     """
     reasons: list[str] = []
     try:
-        for condition in (deployment.get("status") or {}).get("conditions") or []:
+        conditions = (deployment.get("status") or {}).get("conditions") or []
+        # ReplicaFailure first, because the pod loop below cannot see the one
+        # stall that produces no pod at all. A namespace ResourceQuota rejects
+        # creation at the ReplicaSet, so every container state is empty and the
+        # Available condition says only "does not have minimum availability" --
+        # the caller was told the workload was slow when it had in fact been
+        # refused, and the exceeded quota was named nowhere it would look.
+        # kubelet copies the reason onto this object, so reading it costs nothing.
+        for condition in conditions:
             if (
-                str(condition.get("type")) == "Available"
-                and str(condition.get("status")) != "True"
+                str(condition.get("type")) == "ReplicaFailure"
+                and str(condition.get("status")) == "True"
                 and (message := str(condition.get("message") or "").strip())
             ):
                 reasons.append(message)
                 break
+        if not reasons:
+            for condition in conditions:
+                if (
+                    str(condition.get("type")) == "Available"
+                    and str(condition.get("status")) != "True"
+                    and (message := str(condition.get("message") or "").strip())
+                ):
+                    reasons.append(message)
+                    break
         selector = urllib.parse.quote(
             ",".join(
                 f"{key}={value}"

@@ -41,6 +41,27 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertNotIn('node-role.kubernetes.io/control-plane-', script)
         self.assertIn("dev/kubeadm/lima.yaml", script)
 
+    def test_the_port_preflight_binds_rather_than_listing_owned_sockets(self) -> None:
+        """The preflight must detect a busy port whoever owns it.
+
+        `lsof` reports only sockets owned by the user running it, so a quickstart
+        port held by root or another account read as free and `make quickstart`
+        then failed several minutes later on the Lima forward this check exists
+        to catch -- a false pass in exactly its own scenario. Binding the address
+        Lima binds answers the question for any owner.
+        """
+        script = (ROOT / "scripts" / "quickstart-kubeadm.sh").read_text(encoding="utf-8")
+        self.assertNotIn("lsof", script.replace("`lsof`", ""))
+        self.assertIn("ports_in_use()", script)
+        self.assertIn('probe.bind(("127.0.0.1", int(port)))', script)
+        self.assertIn("socket.SO_REUSEADDR", script)
+        # Both preflights go through it: the fixed-port contract and the
+        # API-server forward checked again just before the VM is created.
+        self.assertIn(
+            'busy=$(ports_in_use "$api_port" $(seq "$host_port_base"', script
+        )
+        self.assertIn('if [[ -n "$(ports_in_use "$api_port")" ]]; then', script)
+
     def test_quickstart_lima_template_needs_no_precreated_network(self) -> None:
         template = yaml.safe_load(
             (ROOT / "dev" / "kubeadm" / "lima.yaml").read_text(encoding="utf-8")
@@ -389,7 +410,140 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn("SITES_CONTROL_IMAGE_DIGEST", adapter)
         self.assertNotIn("INFRA_", adapter)
         self.assertNotIn("limactl", adapter)
+        self.assertIn("SITES_HOST_PORT_BASE", adapter)
+        self.assertIn("nodePort.hostPortBase", adapter)
 
+    def test_cluster_scoped_crds_make_the_release_exclusive_and_say_so(self) -> None:
+        """`--namespace` looks like it permits a second install. It does not.
+
+        Both CRDs are cluster-scoped and rendered as ordinary templates, so the
+        first release owns them and any later install anywhere in the cluster
+        stops on Helm's ownership check -- an error about
+        `meta.helm.sh/release-namespace` annotations, which says nothing about
+        Site to a reader who has not met it before. Nothing said the limit
+        existed, while `--namespace` on both install scripts implied the
+        opposite.
+
+        If the CRDs ever move to the Chart's `crds/` directory the exclusivity
+        goes away, and this test should be deleted rather than adjusted.
+        """
+        rendered = subprocess.run(
+            ["helm", "template", "site", str(CHART), *POD_CIDR],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        crds = [
+            item
+            for item in yaml.safe_load_all(rendered)
+            if isinstance(item, dict)
+            and item.get("kind") == "CustomResourceDefinition"
+        ]
+        self.assertEqual(
+            sorted(item["metadata"]["name"] for item in crds),
+            ["sitebuilds.sites.local", "sitedeployments.sites.local"],
+        )
+        self.assertFalse(
+            (CHART / "crds").exists(),
+            "CRDs moved out of templates/; the exclusivity note is now wrong",
+        )
+        standalone_doc = (ROOT / "docs" / "STANDALONE.md").read_text(encoding="utf-8")
+        self.assertIn("One release per cluster", standalone_doc)
+        self.assertIn("meta.helm.sh/release-namespace", standalone_doc)
+
+    def test_both_install_paths_take_the_same_cluster_facts(self) -> None:
+        """standalone.sh must accept what cluster.sh accepts.
+
+        The two are the repository's install seams and cluster_benchmark.py goes
+        through standalone.sh. That one hardcoded values-dev.yaml, whose
+        clusterNetwork.podCIDR names the reference kubeadm topology, and the
+        operator refuses to start when its own address falls outside it. So the
+        benchmark -- the script whose report invites reproduction -- could only
+        run on a cluster whose Pod network happened to match, and nothing said
+        so: the install succeeds and the operator then refuses.
+        """
+        standalone = (ROOT / "scripts" / "standalone.sh").read_text(encoding="utf-8")
+        adapter = (ROOT / "scripts" / "cluster.sh").read_text(encoding="utf-8")
+        for seam in ("SITES_HELM_VALUES", "SITES_CLUSTER_POD_CIDR"):
+            with self.subTest(seam=seam):
+                self.assertIn(seam, adapter)
+                self.assertIn(seam, standalone)
+        self.assertIn(
+            'values_file=${SITES_HELM_VALUES:-$root/charts/site/values-dev.yaml}',
+            standalone,
+        )
+        self.assertIn(
+            'helm_set+=(--set-string "clusterNetwork.podCIDR=$SITES_CLUSTER_POD_CIDR")',
+            standalone,
+        )
+
+    def test_registry_address_follows_the_namespace_it_is_installed_into(self) -> None:
+        """The registry Service address must come from namespaces.control.
+
+        The Service is created in that namespace, but the code defaults pinned
+        it at `sites-registry.sites-local.svc:5000`. Installed anywhere else,
+        builds pushed to a Service that is not there and the control plane
+        resolved digests against the same missing address -- with the Chart
+        rendering cleanly and nothing at any layer naming the namespace.
+        """
+        rendered = subprocess.run(
+            [
+                "helm",
+                "template",
+                "site",
+                str(CHART),
+                *POD_CIDR,
+                "--set-string",
+                "namespaces.control=elsewhere",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn('value: "sites-registry.elsewhere.svc:5000"', rendered)
+        self.assertIn('value: "http://sites-registry.elsewhere.svc:5000"', rendered)
+        self.assertNotIn('value: "sites-registry.sites-local.svc:5000"', rendered)
+        # Both processes reach the registry: the API resolves and deletes
+        # images, the operator runs the build. One of the two carrying it is
+        # the same defect with a smaller blast radius.
+        self.assertEqual(rendered.count("SITES_REGISTRY_PUSH_HOST"), 2)
+        self.assertEqual(rendered.count("SITES_REGISTRY_API"), 2)
+
+    def test_default_install_declares_no_host_port_mapping(self) -> None:
+        """The Chart must not assume a host forwards anything to the NodePort pool.
+
+        Only the environment around a cluster can know that, and a wrong guess is
+        not visibly wrong: the deployment is healthy and control-plane
+        verification passes, because verification probes the in-cluster address.
+        A default here therefore reaches the user as a public URL naming whatever
+        else happens to own that host port. Absent the variable,
+        exposure.host_port_base() returns None and no URL is claimed at all.
+        """
+        rendered = subprocess.run(
+            ["helm", "template", "site", str(CHART), *POD_CIDR],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertNotIn("SITES_HOST_PORT_BASE", rendered)
+        self.assertIn("SITES_PUBLIC_URL_HOST", rendered)
+
+        declared = subprocess.run(
+            [
+                "helm",
+                "template",
+                "site",
+                str(CHART),
+                *POD_CIDR,
+                "--set-string",
+                "nodePort.hostPortBase=18090",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertIn("SITES_HOST_PORT_BASE", declared)
+        self.assertIn('value: "18090"', declared)
 
 
 if __name__ == "__main__":

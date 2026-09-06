@@ -65,7 +65,7 @@ workflow, plus a separate `site-values-VERSION.yaml` digest-pinned override and
 ## Local kubeadm environment
 
 Prerequisites for the complete local trial: Lima, a running Docker daemon, kubectl, Helm,
-curl, uv, lsof, and Python 3.12+. Run `make quickstart-doctor` for the executable preflight.
+curl, uv, and Python 3.12+. Run `make quickstart-doctor` for the executable preflight.
 The default three VMs allocate 8 CPUs, 10 GiB RAM, and 70 GiB of sparse disk in total;
 outbound HTTPS and host ports 18090–18098 plus 18447 are required. The repository creates
 one control-plane and two worker VMs on its own Lima network and bootstraps Kubernetes with

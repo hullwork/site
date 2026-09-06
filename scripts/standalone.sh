@@ -6,7 +6,13 @@ action=${1:-}
 if [[ -n "$action" ]]; then shift; fi
 namespace=sites-local
 release=site
-values_file="$root/charts/site/values-dev.yaml"
+# Same two seams cluster.sh already exposes, and for the same reason: the values
+# overlay names one specific local topology, and clusterNetwork.podCIDR is a fact
+# about the target cluster that the operator refuses to start without. Without
+# them this script -- and therefore scripts/cluster_benchmark.py, which installs
+# through it -- could only ever run against a cluster whose Pod network happens
+# to be the overlay's.
+values_file=${SITES_HELM_VALUES:-$root/charts/site/values-dev.yaml}
 helm_set=()
 helm_set_value=()
 context=${SITES_KUBE_CONTEXT:-}
@@ -30,12 +36,17 @@ Usage: standalone.sh <install|smoke|uninstall> [options]
 Options:
   --namespace NAME  Kubernetes namespace (default: sites-local)
   --release NAME    Helm release name (default: site)
-  --values FILE     Helm values file (default: charts/site/values-dev.yaml)
+  --values FILE     Helm values file (default: charts/site/values-dev.yaml,
+                    or $SITES_HELM_VALUES)
   --set KEY=VALUE   Additional Helm string value (repeatable)
   --set-value KEY=VALUE
                     Additional typed Helm value (repeatable; booleans/numbers)
 EOF
 }
+
+if [[ -n "${SITES_CLUSTER_POD_CIDR:-}" ]]; then
+  helm_set+=(--set-string "clusterNetwork.podCIDR=$SITES_CLUSTER_POD_CIDR")
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

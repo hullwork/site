@@ -22,6 +22,7 @@ from unittest.mock import patch
 import yaml
 
 from tests import chart
+from tests.test_exposure import REFERENCE_HOST_PORT_BASE, using_host_port_base
 from tests.test_support import postgres_connection, postgres_store
 
 from sites import exposure as _exposure
@@ -69,6 +70,7 @@ from sites.validation import (
     DEFAULT_MAX_DEPLOYMENTS,
     DEFAULT_MAX_PUBLIC_ROUTES,
     DEFAULT_MERCHANT_ID,
+    dns_label,
     INLINE_ARTIFACT_MAX_FILES,
     INLINE_ARTIFACT_MAX_TOTAL_BYTES,
     MAX_ENV_VARS,
@@ -1230,6 +1232,206 @@ class CommonTests(unittest.TestCase):
             _bundle_response("demo-stack", objects)["phase"], "Deploying"
         )
 
+    def test_shipped_bundle_examples_are_accepted_by_the_real_validator(self) -> None:
+        """Every file README points at must survive the endpoint's own checks.
+
+        Nothing submitted these, so both drifted out of the contract they
+        illustrate and stayed in the tree: one carried a flat single-deployment
+        shape the bundle endpoint refuses outright, the other a `command` field
+        that is not a deployment field. A reader following README's "examples in
+        deploy-specs/" got a 400 from the first command they ran.
+
+        This goes through the same functions /v1/bundles does -- the top-level
+        field check and bundle_resources -- rather than a copy of their rules,
+        so an example cannot pass here and fail there.
+        """
+        specs = sorted(
+            (Path(__file__).resolve().parent.parent / "deploy-specs").glob("*.json")
+        )
+        self.assertTrue(specs, "deploy-specs/ has no examples to check")
+        for spec_path in specs:
+            with self.subTest(example=spec_path.name):
+                payload = json.loads(spec_path.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    set(payload) - {"name", "components"},
+                    set(),
+                    "the bundle endpoint refuses unknown top-level fields",
+                )
+                objects = bundle_resources(
+                    dns_label(str(payload["name"])),
+                    payload.get("components"),
+                    DEFAULT_MERCHANT_ID,
+                    "local",
+                )
+                self.assertEqual(len(objects), len(payload["components"]))
+
+    def test_shipped_bundle_examples_do_not_claim_each_other_names(self) -> None:
+        # Component names are unique per tenant, so two examples sharing one
+        # would make whichever is submitted second fail with a 409 that reads
+        # like a bug in the reader's own cluster.
+        seen: dict[str, str] = {}
+        for spec_path in sorted(
+            (Path(__file__).resolve().parent.parent / "deploy-specs").glob("*.json")
+        ):
+            payload = json.loads(spec_path.read_text(encoding="utf-8"))
+            for component in payload["components"]:
+                name = component["name"]
+                self.assertNotIn(
+                    name,
+                    seen,
+                    f"{spec_path.name} reuses component {name!r} from {seen.get(name)}",
+                )
+                seen[name] = spec_path.name
+
+    def test_evidence_is_collected_from_health_path_and_says_so(self) -> None:
+        """The probe address must be the documented one, and documented as bounded.
+
+        The contract tells a caller to compare the public URL's response digest
+        with `bodySha256`, which only holds while `healthPath` is `/`. Measured:
+        a source build (whose `--health-path` defaults to `/healthz`) came up
+        `Running`, `ready`, `verification.ok=true`, `httpStatus=200`, with a
+        public URL that answered 403 — the probe had asked `/healthz` and the
+        person opens `/`.
+
+        Both halves are pinned because either alone is useless: the URL builder
+        without the caveat is an undocumented trap, and the caveat without the
+        builder is a claim about code that may have moved on.
+        """
+        source = (
+            Path(__file__).resolve().parent.parent / "src" / "sites" / "operator.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('f"{spec[\'healthPath\']}"', source)
+        contract = (
+            Path(__file__).resolve().parent.parent / "docs" / "AGENT_CONTRACT.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Evidence covers `healthPath`, not the whole site", contract)
+        self.assertIn("`sites build submit` defaults to\n`/healthz`", contract)
+
+        # The trial prints "public URL body: matches verification digest" and
+        # hard-fails when they differ, which is only reachable because it takes
+        # the default health path. Passing one would break the trial itself.
+        quickstart = (
+            Path(__file__).resolve().parent.parent
+            / "scripts"
+            / "quickstart-kubeadm.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("public URL body digest", quickstart)
+        self.assertNotIn("--health-path", quickstart)
+
+    def test_stale_evidence_stays_and_is_distinguishable_by_revision(self) -> None:
+        """A failed rollout keeps the previous revision's passing evidence.
+
+        That retention is deliberate -- it is still true that the earlier
+        revision served traffic -- but it means a response can read
+        `phase: Failed` and `verification.ok: true` at the same time. Observed
+        live: a dynamic site's version 2 never became ready, and `sites status`
+        answered Failed while carrying version 1's 200 and body digest.
+
+        The only thing separating the two is the revision each names, so both
+        must be in the same response and the contract must say to compare them.
+        Documenting the rule without the fields, or shipping the fields without
+        the rule, leaves the caller reading `ok` alone.
+        """
+        obj = {
+            "metadata": {"name": "local-local-demo-0", "generation": 2},
+            "spec": {
+                "merchantID": DEFAULT_MERCHANT_ID,
+                "userID": "local",
+                "serviceName": "demo",
+                "image": "example.invalid/demo@sha256:" + "b" * 64,
+                "port": 8080,
+                "revision": "200",
+                "exposure": "public",
+            },
+            "status": {
+                "phase": "Failed",
+                "observedGeneration": 2,
+                "message": "Deployment was not ready within 120s",
+                "verification": {
+                    "ok": True,
+                    "httpStatus": 200,
+                    "bodySha256": "c" * 64,
+                    "revision": "100",
+                },
+            },
+        }
+        response = _deployment_response(obj)
+        self.assertEqual(response["phase"], "Failed")
+        self.assertTrue(response["verification"]["ok"])
+        self.assertEqual(response["revision"], "200")
+        self.assertEqual(response["verification"]["revision"], "100")
+        self.assertNotEqual(
+            response["revision"], response["verification"]["revision"]
+        )
+
+        contract = (
+            Path(__file__).resolve().parent.parent / "docs" / "AGENT_CONTRACT.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("verification.revision == revision", contract)
+        self.assertIn("Evidence belongs to the revision it names", contract)
+
+    def test_bundle_components_carry_the_verification_evidence(self) -> None:
+        """Each component must surface the evidence the operator wrote for it.
+
+        docs/AGENT_CONTRACT.md makes status.verification the only success
+        criterion, and a bundle is one of its deployment entry points. The
+        operator collects it per component, so dropping it from this projection
+        left a bundle caller with phase Running and nothing to check -- the
+        evidence existed on the resource the whole time and was simply
+        unreachable through the API.
+        """
+        evidence = {
+            "ok": True,
+            "httpStatus": 200,
+            "bodySha256": "a" * 64,
+            "revision": "7",
+        }
+        objects = bundle_resources(
+            "demo-stack",
+            self._sample_components(),
+            DEFAULT_MERCHANT_ID,
+            "local",
+        )
+        for resource in objects:
+            resource["metadata"]["generation"] = 2
+            resource["status"] = {
+                "phase": "Running",
+                "observedGeneration": 2,
+                "verification": evidence,
+            }
+        response = _bundle_response("demo-stack", objects)
+        self.assertTrue(response["components"])
+        for component in response["components"]:
+            self.assertEqual(component["verification"], evidence)
+
+    def test_bundle_components_carry_the_reason_they_failed(self) -> None:
+        # A component that never rolled out reported `Failed` and nothing else,
+        # so the caller had no way to tell an exhausted tenant quota from an
+        # image that will not pull. The operator writes the reason onto the
+        # resource either way; only the projection dropped it.
+        objects = bundle_resources(
+            "demo-stack",
+            self._sample_components(),
+            DEFAULT_MERCHANT_ID,
+            "local",
+        )
+        reason = (
+            "Deployment was not ready within 120s (exceeded quota: "
+            "sites-tenant-quota, requested: limits.cpu=1, used: limits.cpu=4)"
+        )
+        for resource in objects:
+            resource["metadata"]["generation"] = 1
+            resource["status"] = {
+                "phase": "Failed",
+                "observedGeneration": 1,
+                "message": reason,
+            }
+        response = _bundle_response("demo-stack", objects)
+        self.assertEqual(response["phase"], "Failed")
+        self.assertTrue(response["components"])
+        for component in response["components"]:
+            self.assertEqual(component["message"], reason)
+
 def _crd_spec_properties() -> set[str]:
     """Read the SiteDeployment spec fields the CRD actually declares.
 
@@ -1588,13 +1790,40 @@ class PortMappingContractTests(unittest.TestCase):
     def test_the_mapping_matches_the_url_formula(self) -> None:
         # The only source of truth for URL formulas is in sites/exposure.py - just take the public_url from the backend
         # Reconciling port_forwards, what is nailed is the real invariant of "exposure constant ↔ host mapping".
+        # The base is declared here rather than defaulted: this pins the trial's
+        # own topology, and every other environment gets no URL at all until it
+        # declares the forward it actually publishes.
         mappings = self._mappings()
-        for port in NODE_PORT_RANGE:
-            self.assertEqual(
-                _exposure.NodePortExposure().public_url({"nodePort": port}),
-                f"http://127.0.0.1:{mappings[port]}",
-                f"nodePort {port} The URL does not match the portForward mapping",
-            )
+        with using_host_port_base(REFERENCE_HOST_PORT_BASE):
+            for port in NODE_PORT_RANGE:
+                self.assertEqual(
+                    _exposure.NodePortExposure().public_url({"nodePort": port}),
+                    f"http://127.0.0.1:{mappings[port]}",
+                    f"nodePort {port} The URL does not match the portForward mapping",
+                )
+
+    def test_the_reference_base_is_what_the_trial_declares_to_the_chart(self) -> None:
+        """The trial script must hand the Chart the base its Lima forwards use.
+
+        Two spellings of one fact: dev/kubeadm/lima.yaml opens the host ports and
+        scripts/quickstart-kubeadm.sh tells the control plane which base to build
+        URLs from. Drift between them is invisible -- the deployment is healthy,
+        verification passes on the in-cluster address -- until somebody opens the
+        URL.
+        """
+        script = (
+            Path(__file__).resolve().parent.parent
+            / "scripts"
+            / "quickstart-kubeadm.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            f"host_port_base=${{SITES_QUICKSTART_HOST_PORT_BASE:-{REFERENCE_HOST_PORT_BASE}}}",
+            script,
+        )
+        self.assertIn('--set "nodePort.hostPortBase=$host_port_base"', script)
+        self.assertEqual(
+            int(REFERENCE_HOST_PORT_BASE), self._mappings()[min(NODE_PORT_RANGE)]
+        )
 
     def test_there_is_exactly_one_source_for_the_pod_cidr(self) -> None:
         # 🔴 Successor to test_cluster_cidrs_match_the_profile, which asserted

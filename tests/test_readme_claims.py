@@ -94,5 +94,117 @@ class ReadmeTestCountTests(unittest.TestCase):
         )
 
 
+class ModuleMapTests(unittest.TestCase):
+    """The per-module table has to still describe this package.
+
+    It listed 43 of 45 modules: `api_mcp.py` -- the `POST /mcp` endpoint, which
+    the README and AGENT_CONTRACT both treat as a headline surface -- and
+    `http_kit.py` were simply absent, and the composition-root sentence counted
+    "eight endpoint mixins" while `Handler` combined nine. A table maintained by
+    hand drifts silently, because nothing about adding a module makes anyone
+    reopen it.
+    """
+
+    TABLE = re.compile(
+        r"\| File under `src/sites/` \| Responsibility \|(?P<body>.+?)</details>",
+        re.S,
+    )
+
+    def setUp(self) -> None:
+        self.text = README.read_text(encoding="utf-8")
+        self.modules = sorted(
+            path.name
+            for path in (REPO_ROOT / "src" / "sites").glob("*.py")
+            if path.name != "__init__.py"
+        )
+
+    def test_the_table_is_where_this_gate_thinks_it_is(self) -> None:
+        self.assertIsNotNone(self.TABLE.search(self.text))
+        self.assertGreater(len(self.modules), 20)
+
+    def test_every_module_appears_in_the_map(self) -> None:
+        body = self.TABLE.search(self.text).group("body")
+        named = set(re.findall(r"`([a-z_0-9]+\.py)`", body))
+        self.assertEqual(
+            sorted(set(self.modules) - named),
+            [],
+            "modules with no row in the README map",
+        )
+        self.assertEqual(
+            sorted(named - set(self.modules)),
+            [],
+            "rows naming files that no longer exist",
+        )
+
+    def test_the_mixin_sentence_names_every_endpoint_mixin(self) -> None:
+        """Derived from the classes, not from a number someone typed."""
+        mixins = sorted(
+            path.stem.removeprefix("api_")
+            for path in (REPO_ROOT / "src" / "sites").glob("api_*.py")
+            if re.search(r"^class \w+Mixin", path.read_text(encoding="utf-8"), re.M)
+        )
+        self.assertIn("mcp", mixins)
+        spelled = {
+            8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve",
+        }.get(len(mixins))
+        self.assertIsNotNone(spelled, f"add {len(mixins)} to the spelled-out numbers")
+        self.assertIn(f"combines {spelled} endpoint mixins", self.text)
+        for name in mixins:
+            with self.subTest(mixin=name):
+                self.assertRegex(self.text, rf"endpoint mixins \([^)]*\b{name}\b")
+
+
+class EnvironmentVariableDiscoverabilityTests(unittest.TestCase):
+    """Every knob the code reads has to be named somewhere a reader looks.
+
+    README carried "45 `SITES_*` environment variables ... appear in no document
+    or chart" long after the number stopped being true: measured on the same
+    definition the sentence uses, it was 8. A count nobody recomputes is a claim,
+    and this one drifted the safe direction -- overstating a gap that had mostly
+    been closed -- which is why nothing surfaced it.
+    """
+
+    READ = re.compile(
+        r"(?:getenv|environ\.get|environ)\(\s*[\"'](SITES_[A-Z0-9_]+)[\"']"
+    )
+
+    @staticmethod
+    def _named_in(paths) -> set[str]:
+        found: set[str] = set()
+        for path in paths:
+            if path.is_file():
+                found |= set(
+                    re.findall(r"SITES_[A-Z0-9_]+", path.read_text(encoding="utf-8"))
+                )
+        return found
+
+    def _read_by_source(self) -> set[str]:
+        names: set[str] = set()
+        for path in (REPO_ROOT / "src" / "sites").glob("*.py"):
+            names |= set(self.READ.findall(path.read_text(encoding="utf-8")))
+        return names
+
+    def test_the_scan_finds_the_variables_it_is_meant_to(self) -> None:
+        """Guard the denominator: an empty read set would pass silently."""
+        read = self._read_by_source()
+        self.assertGreater(len(read), 50, "the getenv scan matched almost nothing")
+        for known in ("SITES_HOST_PORT_BASE", "SITES_EXPOSURE_BACKEND"):
+            self.assertIn(known, read)
+
+    def test_every_variable_the_code_reads_is_named_somewhere(self) -> None:
+        documented = self._named_in(
+            list((REPO_ROOT / "docs").glob("*.md")) + [README]
+        )
+        charted = self._named_in((REPO_ROOT / "charts").rglob("*"))
+        missing = sorted(self._read_by_source() - documented - charted)
+        self.assertEqual(
+            missing,
+            [],
+            "read by src/sites/ but named in no document and no chart template; "
+            "add a row to docs/CONFIGURATION.md#undocumented-tuning-variables "
+            f"or set it in the chart: {missing}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
