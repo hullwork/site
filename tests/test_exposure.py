@@ -606,6 +606,45 @@ class GatewayManifestContractTest(unittest.TestCase):
         listener = self._doc("Gateway")["spec"]["listeners"][0]
         self.assertEqual(listener["hostname"], f"*.{exposure.DOMAIN_SUFFIX}")
 
+    def test_the_gateway_identity_survives_a_non_default_namespace(self) -> None:
+        """The control plane must be told which Gateway the Chart made.
+
+        The Gateway object is named after `namespaces.gateway`, while
+        `SITES_GATEWAY_NAME` and `SITES_GATEWAY_NAMESPACE` defaulted to the
+        literal `sites-gateway` and the Chart never set them. They agreed only
+        when the release happened to live in a namespace of that name -- and
+        both install scripts set `namespaces.gateway` to the release namespace,
+        which defaults to `sites-local`.
+
+        Measured on a real cluster before the fix: every HTTPRoute carried
+        `parentRef: sites-gateway/sites-gateway`, no Gateway claimed it (the
+        route had no parent status at all), the tenant NetworkPolicy admitted a
+        data-plane Pod label nothing carried, and the site was `Running` with
+        `verification.ok` while its public URL answered 404. After: route
+        Accepted=True, policy label `sites-gw`, URL 200 with the verified digest.
+
+        The existing identity test above renders the defaults, where both sides
+        read `sites-gateway` and agree no matter what the Chart does; this one
+        has to use a different namespace or it asserts nothing.
+        """
+        overrides = ("--set-string", "namespaces.gateway=elsewhere-gw")
+        docs = chart.documents("08-gateway.yaml", *overrides)
+        gateway = next(doc for doc in docs if doc["kind"] == "Gateway")
+        config = next(
+            doc for doc in docs
+            if doc["kind"] == "ConfigMap" and "SITES_GATEWAY_NAME" in doc["data"]
+        )
+        self.assertEqual(gateway["metadata"]["name"], "elsewhere-gw")
+        self.assertEqual(config["data"]["SITES_GATEWAY_NAME"], "elsewhere-gw")
+        self.assertEqual(config["data"]["SITES_GATEWAY_NAMESPACE"], "elsewhere-gw")
+        self.assertEqual(
+            config["data"]["SITES_GATEWAY_NAME"], gateway["metadata"]["name"]
+        )
+        self.assertEqual(
+            config["data"]["SITES_GATEWAY_NAMESPACE"],
+            gateway["metadata"]["namespace"],
+        )
+
     def test_the_host_facing_url_parts_are_values_not_literals(self) -> None:
         """A different host must not require editing the template.
 

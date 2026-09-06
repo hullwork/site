@@ -44,6 +44,18 @@ data:
   # Site hostname = <serviceName>-<tenant summary>.<this suffix>.
   SITES_DOMAIN_SUFFIX: {{ .Values.gateway.domainSuffix | quote }}
 # Host-facing URL scheme and port for the local Lima port forwarding.
+  # Which Gateway the control plane points at. The object below is named after
+  # namespaces.gateway, while the code defaulted both of these to the literal
+  # "sites-gateway", so they agreed only when the release happened to be
+  # installed into a namespace of that name -- and both install scripts set
+  # namespaces.gateway to the release namespace, which by default is
+  # sites-local. Everywhere else the operator wrote HTTPRoutes whose parentRef
+  # named a Gateway that does not exist and a tenant NetworkPolicy that admitted
+  # a data-plane Pod label nothing carries. Neither shows up as an error: the
+  # route is created, the deployment is Running, verification passes on the
+  # in-cluster address, and the public URL answers 404.
+  SITES_GATEWAY_NAME: {{ .Values.namespaces.gateway | quote }}
+  SITES_GATEWAY_NAMESPACE: {{ .Values.namespaces.gateway | quote }}
   SITES_GATEWAY_SCHEME: {{ .Values.gateway.scheme | quote }}
   SITES_GATEWAY_HOST_PORT: {{ .Values.gateway.hostPort | quote }}
   # The tenant image is in the workload registry, not the CP Registry that hosts the control plane image.
