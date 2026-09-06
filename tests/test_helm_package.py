@@ -413,6 +413,44 @@ class HelmPackageContractTests(unittest.TestCase):
         self.assertIn("SITES_HOST_PORT_BASE", adapter)
         self.assertIn("nodePort.hostPortBase", adapter)
 
+    def test_cluster_scoped_crds_make_the_release_exclusive_and_say_so(self) -> None:
+        """`--namespace` looks like it permits a second install. It does not.
+
+        Both CRDs are cluster-scoped and rendered as ordinary templates, so the
+        first release owns them and any later install anywhere in the cluster
+        stops on Helm's ownership check -- an error about
+        `meta.helm.sh/release-namespace` annotations, which says nothing about
+        Site to a reader who has not met it before. Nothing said the limit
+        existed, while `--namespace` on both install scripts implied the
+        opposite.
+
+        If the CRDs ever move to the Chart's `crds/` directory the exclusivity
+        goes away, and this test should be deleted rather than adjusted.
+        """
+        rendered = subprocess.run(
+            ["helm", "template", "site", str(CHART), *POD_CIDR],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        crds = [
+            item
+            for item in yaml.safe_load_all(rendered)
+            if isinstance(item, dict)
+            and item.get("kind") == "CustomResourceDefinition"
+        ]
+        self.assertEqual(
+            sorted(item["metadata"]["name"] for item in crds),
+            ["sitebuilds.sites.local", "sitedeployments.sites.local"],
+        )
+        self.assertFalse(
+            (CHART / "crds").exists(),
+            "CRDs moved out of templates/; the exclusivity note is now wrong",
+        )
+        standalone_doc = (ROOT / "docs" / "STANDALONE.md").read_text(encoding="utf-8")
+        self.assertIn("One release per cluster", standalone_doc)
+        self.assertIn("meta.helm.sh/release-namespace", standalone_doc)
+
     def test_both_install_paths_take_the_same_cluster_facts(self) -> None:
         """standalone.sh must accept what cluster.sh accepts.
 

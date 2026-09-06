@@ -49,6 +49,21 @@ on control-plane reboot and removed with the disposable VM.
 deletes its VMs, repository-owned Lima network, every application inside it, and this
 checkout's local kubeconfig.
 
+**One release per cluster.** The Chart's two CustomResourceDefinitions
+(`sitedeployments.sites.local`, `sitebuilds.sites.local`) are cluster-scoped and are
+rendered as ordinary templates, so the release that installs them owns them. A second
+install into any other namespace stops at Helm's ownership check:
+
+```text
+Error: Unable to continue with install: CustomResourceDefinition
+"sitedeployments.sites.local" in namespace "" exists and cannot be imported into the
+current release: invalid ownership metadata; annotation validation error:
+key "meta.helm.sh/release-namespace" must equal "<yours>": current value is "<theirs>"
+```
+
+`--namespace` selects where the control plane runs, not how many control planes a cluster
+can hold. Uninstall the existing release before installing another, or use another cluster.
+
 The lower-level path installs Site into the Kubernetes context selected by `kubectl`.
 Review the current context before continuing:
 
