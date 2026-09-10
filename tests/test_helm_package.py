@@ -20,6 +20,16 @@ CHART = ROOT / "charts" / "site"
 # rather than through tests/chart.py, so they state it themselves.
 POD_CIDR = ("--set-string", "clusterNetwork.podCIDR=10.201.0.0/16")
 
+# The complete external-database configuration. The refusal tests below remove
+# exactly one part of it, so the guard each one is about is the only thing left
+# that can fail.
+EXTERNAL_DATABASE = (
+    "--set", "postgresql.embedded.enabled=false",
+    "--set-string", "database.host=postgres.example.net",
+    "--set-string", "database.runtimeHost=postgres.example.net",
+    "--set-string", "database.sslmode=verify-full",
+)
+
 
 class HelmPackageContractTests(unittest.TestCase):
     def test_quickstart_is_a_repository_owned_kubeadm_workflow(self) -> None:
@@ -279,6 +289,80 @@ class HelmPackageContractTests(unittest.TestCase):
                 "key: registry-htpasswd", "secretName: custom-oss", "key: oss-secret",
             ):
                 self.assertIn(expected, custom)
+
+    def test_external_database_replaces_the_bundled_one(self) -> None:
+        """The bundled server has to disappear, not just lose its address.
+
+        Rewriting `SITES_DB_HOST` on its own leaves the StatefulSet, its Service
+        and its ingress policy in the release, and the tenant-facing runtime
+        host still names the Service the same render declined to create.
+        """
+        rendered = subprocess.check_output(
+            ["helm", "template", "site", str(CHART), *POD_CIDR, *EXTERNAL_DATABASE],
+            text=True,
+        )
+        documents = [item for item in yaml.safe_load_all(rendered) if item]
+        named = {(item.get("kind"), item["metadata"]["name"]) for item in documents}
+        for absent in ("Service", "StatefulSet", "NetworkPolicy"):
+            self.assertNotIn((absent, "sites-postgres"), named)
+        api = next(
+            item for item in documents
+            if item.get("kind") == "Deployment"
+            and item["metadata"]["name"] == "sites-api"
+        )
+        environment = {
+            item["name"]: item.get("value")
+            for item in api["spec"]["template"]["spec"]["containers"][0]["env"]
+        }
+        self.assertEqual("postgres.example.net", environment["SITES_DB_HOST"])
+        self.assertEqual(
+            "postgres.example.net", environment["SITES_DATA_DB_RUNTIME_HOST"]
+        )
+        self.assertEqual("verify-full", environment["SITES_DB_SSLMODE"])
+
+    def test_the_bundled_database_still_renders_untouched(self) -> None:
+        """Negative control: none of the guards above may fire by default.
+
+        A guard written as `if .Values.postgresql.embedded.enabled` rather than
+        the other way round would pass every refusal test and make the chart
+        uninstallable in its default shape.
+        """
+        rendered = subprocess.check_output(
+            ["helm", "template", "site", str(CHART), *POD_CIDR], text=True
+        )
+        documents = [item for item in yaml.safe_load_all(rendered) if item]
+        named = {(item.get("kind"), item["metadata"]["name"]) for item in documents}
+        self.assertIn(("StatefulSet", "sites-postgres"), named)
+        self.assertIn(("Service", "sites-postgres"), named)
+        self.assertIn("value: disable", rendered)
+
+    def test_the_chart_refuses_a_half_configured_external_database(self) -> None:
+        """Three ways to leave the release dialling something that is not there.
+
+        The default `database.host` is the bundled Service name, so flipping the
+        switch and stopping is the shape an operator actually reaches; an empty
+        runtime host points tenant workloads at that same absent Service; and an
+        unstated SSL mode would inherit the code default of `require` while the
+        chart's own comment still describes the bundled hop that no longer
+        exists.
+        """
+        for missing, override in (
+            ("database.host", ("--set-string", "database.host=sites-postgres")),
+            ("database.runtimeHost", ("--set-string", "database.runtimeHost=")),
+            ("database.sslmode", ("--set-string", "database.sslmode=")),
+        ):
+            with self.subTest(missing=missing):
+                result = subprocess.run(
+                    [
+                        "helm", "template", "site", str(CHART),
+                        *POD_CIDR, *EXTERNAL_DATABASE, *override,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(0, result.returncode, result.stdout[:400])
+                self.assertIn(missing, result.stdout + result.stderr)
 
     def test_chart_renders_after_copy_without_sibling_repositories(self) -> None:
         if not shutil.which("helm"):
