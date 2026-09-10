@@ -215,6 +215,43 @@ consumer's integration layer.
 PostgreSQL is the only metadata backend. Use a dedicated database and account, and pass
 the password through `SITES_DB_PASSWORD_FILE` rather than an environment variable.
 
+### Embedded or external PostgreSQL
+
+`postgresql.embedded.enabled` decides whether the release carries its own database. The
+default is the single-instance StatefulSet in `charts/site`; setting it to `false` drops
+that StatefulSet, its Service and its ingress NetworkPolicy, and the control plane dials
+the server you operate instead:
+
+```yaml
+postgresql:
+  embedded:
+    enabled: false
+database:
+  host: postgres.example.net          # SITES_DB_HOST
+  runtimeHost: postgres.example.net   # SITES_DATA_DB_RUNTIME_HOST, read by tenants
+  port: 5432
+  name: sites
+  user: sites
+  sslmode: verify-full                # SITES_DB_SSLMODE
+```
+
+Three values stop being inferable once the bundled server is gone, and the chart refuses
+to render rather than install a release that dials nothing:
+
+- `database.host` defaults to `sites-postgres`, the Service name this mode does not
+  create.
+- `database.runtimeHost` defaults to
+  `sites-postgres.<control-namespace>.svc.cluster.local`, the address tenant workloads
+  use, which exists only while the bundled server does.
+- `database.sslmode` is `disable` for the bundled server because that image serves no
+  certificate and the hop never leaves the cluster. The code default is `require`, so
+  the chart does not choose for you: state `require`, `verify-ca`, `verify-full`, or
+  `disable`.
+
+Credentials come from `existingSecrets.database` in either mode, so an external server
+only needs a Secret carrying its own values. The database and role must already exist
+there - the bundled StatefulSet is what creates the two it is handed.
+
 `SITES_DB_SSLMODE` defaults to `require`, and `SITES_DATA_DB_SSLMODE` inherits it.
 Accepted values are `require`, `verify-ca`, `verify-full`, and `disable`. libpq's
 `prefer` and `allow` are rejected on purpose: both fall back to an unencrypted

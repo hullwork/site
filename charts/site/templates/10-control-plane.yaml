@@ -349,13 +349,18 @@ spec:
               value: {{ .Values.namespaces.control | quote }}
             - name: SITES_HTTP_PORT
               value: "8080"
+{{- if and (not .Values.postgresql.embedded.enabled) (eq .Values.database.host "sites-postgres") }}
+{{- fail "database.host still names the bundled sites-postgres Service while postgresql.embedded.enabled is false. This render does not create that Service, so the control plane would start against a name that resolves to nothing. Set database.host to the endpoint of the database you operate." }}
+{{- end }}
             - name: SITES_DB_HOST
               value: {{ .Values.database.host | quote }}
             # Tenant workloads run outside sites-local, so the runtime Secret
             # must contain a cross-namespace address. The API keeps using the
             # short control-plane Service name above for its own connections.
+            # With the bundled server switched off there is no Service to derive
+            # that address from, so an external deployment states it.
             - name: SITES_DATA_DB_RUNTIME_HOST
-              value: {{ default (printf "sites-postgres.%s.svc.cluster.local" .Values.namespaces.control) .Values.database.runtimeHost | quote }}
+              value: {{ if .Values.postgresql.embedded.enabled }}{{ default (printf "sites-postgres.%s.svc.cluster.local" .Values.namespaces.control) .Values.database.runtimeHost | quote }}{{ else }}{{ required "database.runtimeHost is required when postgresql.embedded.enabled is false: the bundled sites-postgres Service does not exist and tenant workloads run outside the control namespace, so the runtime Secret needs the address they can reach." .Values.database.runtimeHost | quote }}{{ end }}
             - name: SITES_DB_PORT
               value: {{ .Values.database.port | quote }}
             - name: SITES_DB_NAME
@@ -381,8 +386,10 @@ spec:
             # this is one pod talking to another inside the cluster. Point
             # SITES_DB_HOST at a managed database and drop this variable to get
             # "require" back, or set "verify-full" once you have a CA to check.
+            # With the bundled server switched off there is no such hop to reason
+            # about, so the operator states the mode instead of inheriting it.
             - name: SITES_DB_SSLMODE
-              value: disable
+              value: {{ if .Values.postgresql.embedded.enabled }}disable{{ else }}{{ required "database.sslmode is required when postgresql.embedded.enabled is false. The code default is require, and whether the hop to a database you operate is encrypted is not something this chart can infer. Use require, verify-ca, verify-full, or disable to state that it is not." .Values.database.sslmode }}{{ end }}
             # Signing key for admin console sessions. sites-api refuses to start
             # without it, so the integration layer must add a `console-session-key`
             # key (>=32 characters, different from `token`) to the configured

@@ -116,6 +116,16 @@ All notable changes to this project are documented in this file. The format foll
   through `SITES_OIDC_MERCHANT_MAP`, and an unmapped value is refused with 403 and a log
   line. Tenants may still be created on first use, gated by `SITES_OIDC_SIGNUPS_ENABLED`
   and `SITES_OIDC_EMAIL_DOMAINS`.
+- The chart can point the control plane at a PostgreSQL you operate instead of the
+  StatefulSet it ships. `postgresql.embedded.enabled: false` already dropped that
+  StatefulSet, its Service and its ingress NetworkPolicy, but three values kept their
+  bundled defaults: `database.host` still named `sites-postgres`, the tenant-facing
+  `database.runtimeHost` still resolved that Service's in-cluster DNS name, and
+  `SITES_DB_SSLMODE` was still hardcoded `disable`. All three are now refused at render
+  when the bundled server is off, because each one installs cleanly and then dials a
+  Service that was not created. `database.sslmode` joins the values surface as a stated
+  choice (`require`, `verify-ca`, `verify-full`, `disable`); the bundled install keeps
+  `disable`.
 
 ### Removed
 

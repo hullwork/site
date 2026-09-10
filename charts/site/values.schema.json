@@ -130,6 +130,7 @@
         "host",
         "runtimeHost",
         "port",
+        "sslmode",
         "name",
         "user"
       ],
@@ -141,12 +142,16 @@
         "runtimeHost": {
           "type": "string"
         },
-        "port": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 65535
-        },
-        "name": {
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "sslmode": {
+      "type": "string",
+      "enum": ["", "require", "verify-ca", "verify-full", "disable"]
+    },
+    "name": {
           "type": "string",
           "minLength": 1
         },
