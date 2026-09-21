@@ -96,5 +96,43 @@ class IssueAppTokenForWorkloadTests(unittest.TestCase):
         )
 
 
+class ServiceAccountAnnotationMappingTests(unittest.TestCase):
+    """The operator annotates each per-site ServiceAccount, so a workload maps to
+    its app without anyone registering it by hand."""
+
+    def setUp(self) -> None:
+        self.db = fx.database()
+        self.keys = fx.keyring()
+        self.app_env_id = fx.app_env_id()
+        with self.db.transaction() as cursor:
+            broker_db.ensure_app(cursor, self.app_env_id)
+            broker_db.insert_config_version(cursor, self.app_env_id, 1, "d" * 64, {"apiVersion": "hull/v1alpha1"})
+            broker_db.set_active_version(cursor, self.app_env_id, 1)
+        # A namespace no other test registers in the shared database's workloads table.
+        self.namespace = "ns-" + fx.app_env_id()[:12]
+        self.reviewer = identity.FakeTokenReviewer({"sa-tok": f"system:serviceaccount:{self.namespace}:sa"})
+
+    def _annotate(self, app_env_id: str, site: str = "web") -> None:
+        self.reviewer.annotate(self.namespace, "sa", {identity.APP_ENV_ID_ANNOTATION: app_env_id,
+                                                      identity.SITE_ANNOTATION: site})
+
+    def test_annotated_workload_of_a_configured_app_gets_a_token(self) -> None:
+        self._annotate(self.app_env_id)
+        token, _ = identity.issue_app_token_for_workload(self.db, self.keys, self.reviewer, "sa-tok")
+        caller = identity.verify_app_token(self.keys, token)
+        self.assertEqual((caller.app_env_id, caller.site), (self.app_env_id, "web"))
+
+    def test_an_app_the_broker_has_never_configured_gets_nothing(self) -> None:
+        self._annotate(fx.app_env_id())
+        self.assertIsNone(identity.issue_app_token_for_workload(self.db, self.keys, self.reviewer, "sa-tok"))
+
+    def test_a_malformed_app_id_gets_nothing(self) -> None:
+        self._annotate("not-a-pseudonym")
+        self.assertIsNone(identity.issue_app_token_for_workload(self.db, self.keys, self.reviewer, "sa-tok"))
+
+    def test_no_annotation_gets_nothing(self) -> None:
+        self.assertIsNone(identity.issue_app_token_for_workload(self.db, self.keys, self.reviewer, "sa-tok"))
+
+
 if __name__ == "__main__":
     unittest.main()

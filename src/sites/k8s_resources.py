@@ -554,6 +554,9 @@ HULL_TOKEN_MIN_EXPIRATION_SECONDS = 600
 HULL_TOKEN_MOUNT_PATH = "/var/run/hull"
 HULL_TOKEN_FILE = f"{HULL_TOKEN_MOUNT_PATH}/token"
 _HULL_APP_ENV_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+# Read by sites.broker.identity; the two sides share these names, not an import.
+HULL_APP_ENV_ID_ANNOTATION = "hull.sites.local/app-env-id"
+HULL_SITE_ANNOTATION = "hull.sites.local/site"
 
 
 def hull_token_expiration_seconds() -> int:
@@ -596,8 +599,8 @@ def hull_service_account_resource(
 
     No RBAC bindings on purpose: this ServiceAccount's only use is proving, via
     TokenReview, which (namespace, name) pair a request came from (CONTRACT.md
-    section 3.3). The Broker maps that pair to an app through its own
-    ``workloads:`` setting -- the authorization boundary lives there, not in any
+    section 3.3). The Broker maps that pair to an app through the annotations
+    below or its own ``workloads:`` setting -- the boundary lives there, not in any
     Kubernetes permission this ServiceAccount would otherwise hold, so granting
     it none narrows the blast radius of a compromised workload without taking
     anything away from the mechanism that actually decides trust.
@@ -605,14 +608,25 @@ def hull_service_account_resource(
     if not exposure_backend.hull_broker_enabled():
         return None
     cr_name = cr_name_for(spec["merchantID"], spec["userID"], spec["serviceName"])
+    metadata: dict[str, Any] = {
+        "name": cr_name,
+        "namespace": namespace,
+        "labels": workload_labels(spec["serviceName"]),
+    }
+    # The Broker reads these after TokenReview to learn which app and site the
+    # workload belongs to, so no one has to register each site by hand. Tenants hold
+    # no Kubernetes permissions, so only this operator can write them. Same rule as
+    # HULL_APP_ENV_ID: a user id that is not a project pseudonym maps to no app.
+    user_id = str(spec["userID"])
+    if _HULL_APP_ENV_ID_RE.fullmatch(user_id):
+        metadata["annotations"] = {
+            HULL_APP_ENV_ID_ANNOTATION: user_id,
+            HULL_SITE_ANNOTATION: str(spec["serviceName"]),
+        }
     return {
         "apiVersion": "v1",
         "kind": "ServiceAccount",
-        "metadata": {
-            "name": cr_name,
-            "namespace": namespace,
-            "labels": workload_labels(spec["serviceName"]),
-        },
+        "metadata": metadata,
         "automountServiceAccountToken": False,
     }
 

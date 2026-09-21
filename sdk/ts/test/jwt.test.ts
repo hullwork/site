@@ -17,7 +17,8 @@ function makeSigner() {
   const jwks: Jwks = { keys: [{ ...(jwk as object), kid, use: "sig", alg: "EdDSA" } as Jwks["keys"][number]] };
   function sign(payload: Record<string, unknown>, headerOverrides: Record<string, unknown> = {}): string {
     const header = { alg: "EdDSA", typ: "JWT", kid, ...headerOverrides };
-    const signingInput = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(payload))}`;
+    const claims = { iss: "hull-broker", ...payload };
+    const signingInput = `${b64url(JSON.stringify(header))}.${b64url(JSON.stringify(claims))}`;
     const signature = cryptoSign(null, Buffer.from(signingInput, "utf8"), privateKey as KeyObject);
     return `${signingInput}.${b64url(signature)}`;
   }
@@ -82,7 +83,7 @@ test("JwksCache refetches when asked for an unknown kid", async () => {
   const cache = new JwksCache(async () => {
     fetches += 1;
     return fetches === 1 ? firstJwks : { keys: [...firstJwks.keys, ...secondJwks.keys] };
-  });
+  }, 0);
 
   await cache.get(); // first fetch, only knows the first key
   assert.equal(fetches, 1);
@@ -96,4 +97,41 @@ test("JwksCache refetches when asked for an unknown kid", async () => {
   // A second lookup for a key it already knows about does not refetch again.
   await cache.get(secondKid);
   assert.equal(fetches, 2);
+});
+
+test("verifyCompact rejects a token from another issuer", () => {
+  const { jwks, sign } = makeSigner();
+  const now = Math.floor(Date.now() / 1000);
+  const token = sign({ iss: "someone-else", typ: "user", aud: "a", sub: "u1", exp: now + 600 });
+  assert.throws(() => verifyCompact(token, jwks, { aud: "a", typ: "user" }), /issuer/);
+});
+
+test("JwksCache does not turn every unknown kid into a Broker request", async () => {
+  const { jwks } = makeSigner();
+  let fetches = 0;
+  let clock = 0;
+  const cache = new JwksCache(async () => {
+    fetches += 1;
+    return jwks;
+  }, 30_000, () => clock);
+  await cache.get();
+  for (let i = 0; i < 50; i += 1) {
+    await cache.get(randomUUID());
+  }
+  assert.equal(fetches, 1);
+  clock = 30_001;
+  await cache.get(randomUUID());
+  assert.equal(fetches, 2);
+});
+
+test("JwksCache shares one fetch between concurrent callers", async () => {
+  const { jwks } = makeSigner();
+  let fetches = 0;
+  const cache = new JwksCache(async () => {
+    fetches += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return jwks;
+  });
+  await Promise.all(Array.from({ length: 10 }, () => cache.get()));
+  assert.equal(fetches, 1);
 });

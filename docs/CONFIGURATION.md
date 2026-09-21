@@ -157,6 +157,12 @@ the same name - a workload that could override its own `HULL_APP_ENV_ID` or
 traffic while still presenting a genuine `hull-token`, which is a security boundary, not
 tenant-owned application configuration like the plain `env` deploy field.
 
+Each per-site ServiceAccount carries the annotations `hull.sites.local/app-env-id` (the tenant's user id when it is a 32-hex project pseudonym) and `hull.sites.local/site`. After TokenReview the Broker reads them to learn which app and site the workload is; an explicit `workloads` entry in the app's Broker settings takes precedence, and an app the Broker has no active config for gets no token. Tenants hold no Kubernetes permissions, so only the operator can write these annotations; the gateway's ClusterRole has `get` on `serviceaccounts` to read them.
+
+`SITES_DB_ROLE_STATEMENT_TIMEOUT_MS` is a role default. The platform's own migration executor sets a transaction-local `statement_timeout` (`migrations.py`), which overrides it; an app running its own long statements under the runtime role is bound by it.
+
+`expectedRevision` is checked under the API's mutation lock, so it orders concurrent `POST /v1/deployments` calls. The operator's build-to-deployment reconcile patches the same resource outside that lock and is not covered by it.
+
 ## Undocumented tuning variables
 
 Every `SITES_*` variable `src/sites/` reads now appears in a document or a Chart template;
@@ -304,6 +310,7 @@ fixed windows.
 | --- | --- | --- |
 | `HULL_BROKER_WORKER_INTERVAL_SECONDS` | `60` | How often expired sessions/OTP codes/rate-limit buckets are deleted |
 | `HULL_BROKER_WORKER_STALE_SECONDS` | interval × 3 | Age at which `/healthz` turns unready -- "the last cycle finished within N seconds", not "the process is alive" |
+| `HULL_TRUSTED_PROXY_CIDRS` | empty | Comma-separated CIDRs of the proxies in front of the gateway (the Envoy data plane). Only a request whose socket peer is inside one of them has its `X-Forwarded-For` read, and the client is the rightmost entry that is not itself a trusted proxy. Empty trusts no one: every browser request then carries the proxy's own address and the per-IP sign-in limits are shared by all visitors of an app. Chart value `broker.trustedProxyCIDRs` |
 
 ## Hull Broker (runtime)
 

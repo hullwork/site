@@ -10,6 +10,7 @@ to offer.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import threading
 import time
@@ -51,6 +52,45 @@ def max_inflight() -> int:
                or str(_DEFAULT_MAX_INFLIGHT))
 
 
+def trusted_proxy_networks() -> tuple:
+    """Peers whose X-Forwarded-For is believed: the Envoy data plane in front of the
+    gateway. Browser traffic reaches the Broker only through it, so without this every
+    browser request carries the proxy's own address and one visitor can exhaust the
+    per-IP sign-in limits for every user of an app. Unset trusts no one, and the
+    socket peer is used as before."""
+    raw = (getenv("HULL_TRUSTED_PROXY_CIDRS", "") or "").strip()
+    networks = []
+    for item in filter(None, (part.strip() for part in raw.split(","))):
+        try:
+            networks.append(ipaddress.ip_network(item, strict=False))
+        except ValueError as exc:
+            raise RuntimeError(f"HULL_TRUSTED_PROXY_CIDRS has an invalid entry: {item!r}") from exc
+    return tuple(networks)
+
+
+def _is_trusted(address: str, networks: tuple) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(ip in network for network in networks)
+
+
+def client_ip(peer: str, forwarded_for: str | None, networks: tuple) -> str:
+    """The first address, reading X-Forwarded-For from the right, that is not a
+    trusted proxy. Entries left of it were written by the client and are ignored."""
+    if not networks or not _is_trusted(peer, networks) or not forwarded_for:
+        return peer
+    hops = [hop.strip() for hop in forwarded_for.split(",") if hop.strip()]
+    for hop in reversed(hops):
+        if not _is_trusted(hop, networks):
+            try:
+                return str(ipaddress.ip_address(hop))
+            except ValueError:
+                return peer
+    return peer
+
+
 def _bearer_token(headers: Any) -> str | None:
     value = headers.get("Authorization", "") or ""
     if not value.startswith("Bearer "):
@@ -80,6 +120,7 @@ class _GatewayServer(ThreadingHTTPServer):
 
 
 def build_handler(router: Router, services: Services) -> type[BaseHTTPRequestHandler]:
+    trusted_proxies = trusted_proxy_networks()
     """A fresh Handler subclass per call, so tests can stand up independent
     servers without one test's router leaking into another's class attributes.
     """
@@ -175,7 +216,9 @@ def build_handler(router: Router, services: Services) -> type[BaseHTTPRequestHan
                     method=self.command, path=path, params=params, query=query,
                     headers=self.headers, body=body,
                     host=(self.headers.get("Host") or "").split(":")[0],
-                    client_ip=self.client_address[0], cookies=_cookies(self.headers),
+                    client_ip=client_ip(self.client_address[0],
+                                        self.headers.get("X-Forwarded-For"), trusted_proxies),
+                    cookies=_cookies(self.headers),
                 )
                 request = self._authenticate(request, route.auth)
             except HttpError as exc:

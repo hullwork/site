@@ -220,6 +220,7 @@ class Ledger:
         scope: str,
         amount: int,
         idempotency_key: str | None = None,
+        idempotency_owner: str | None = None,
         user_subject: tuple[str, str] | None = None,
         user_limit: int | None = None,
         app_limit: int | None = None,
@@ -235,6 +236,14 @@ class Ledger:
         """
         if amount <= 0:
             raise ValueError("amount must be positive")
+        if idempotency_key:
+            # The key comes from the app, and apps commonly forward a client-generated
+            # id; without the caller in it, a second user repeating a key would be
+            # handed the first user's stored response. The billing subject is not
+            # enough for this: members of one org share it.
+            if not idempotency_owner:
+                raise ValueError("idempotency_owner is required with an idempotency_key")
+            idempotency_key = f"{idempotency_owner}\x1f{idempotency_key}"
         if call_cap is not None and amount > call_cap:
             raise BudgetExceeded("call")
 

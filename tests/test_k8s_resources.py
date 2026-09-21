@@ -116,12 +116,28 @@ class HullBrokerEnabledTests(unittest.TestCase):
         self.assertEqual(resource["metadata"]["name"], expected_name)
         self.assertEqual(resource["kind"], "ServiceAccount")
         self.assertIs(resource["automountServiceAccountToken"], False)
-        # No RBAC-shaped keys anywhere on the object: it is not a Role/Binding
-        # and does not carry annotations that would attach one implicitly.
+        # No RBAC-shaped keys anywhere on the object: it is not a Role/Binding.
         self.assertEqual(
             set(resource) - {"apiVersion", "kind", "metadata", "automountServiceAccountToken"},
             set(),
         )
+
+    def test_a_project_tenant_is_annotated_with_its_app_and_site(self) -> None:
+        project = "0123456789abcdef" * 2
+        with hull_broker_env(SITES_HULL_BROKER_ENABLED="1"):
+            spec = spec_for(user_id=project)
+            resource = hull_service_account_resource(spec, "ns")
+        assert resource is not None
+        self.assertEqual(resource["metadata"]["annotations"], {
+            "hull.sites.local/app-env-id": project,
+            "hull.sites.local/site": spec["serviceName"],
+        })
+
+    def test_a_tenant_that_is_not_a_project_gets_no_annotation(self) -> None:
+        with hull_broker_env(SITES_HULL_BROKER_ENABLED="1"):
+            resource = hull_service_account_resource(spec_for(user_id="alice"), "ns")
+        assert resource is not None
+        self.assertNotIn("annotations", resource["metadata"])
 
     def test_pod_gets_service_account_and_projected_token_volume(self) -> None:
         with hull_broker_env(SITES_HULL_BROKER_ENABLED="true"):

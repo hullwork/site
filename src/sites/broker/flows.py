@@ -125,7 +125,9 @@ def handle_run(request: Request, services: Services, llm_client: LLMClient) -> R
     try:
         reservation = ledger.reserve(
             app_env_id=request.app.app_env_id, scope=f"flow:{name}", amount=call_cap,
-            idempotency_key=idempotency_key, user_subject=_user_subject(request.user),
+            idempotency_key=idempotency_key,
+            idempotency_owner=request.user.id if request.user is not None else "app",
+            user_subject=_user_subject(request.user),
             user_limit=user_limit, app_limit=app_limit, call_cap=call_cap,
         )
     except BudgetExceeded:

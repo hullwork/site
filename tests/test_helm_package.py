@@ -659,6 +659,26 @@ class HullBrokerChartTests(unittest.TestCase):
         names = {item["metadata"]["name"] for item in documents if "metadata" in item}
         self.assertFalse(any(name.startswith("hull-broker") for name in names))
 
+    def test_enabled_broker_can_reach_postgres_and_read_service_accounts(self) -> None:
+        if not shutil.which("helm"):
+            self.skipTest("helm is not installed")
+        documents = [item for item in yaml.safe_load_all(self._render(*self.BROKER_SECRETS)) if item]
+        policy = next(d for d in documents if d["kind"] == "NetworkPolicy"
+                      and d["metadata"]["name"] == "sites-postgres")
+        admitted = set()
+        for rule in policy["spec"]["ingress"]:
+            for peer in rule["from"]:
+                for expr in (peer.get("podSelector") or {}).get("matchExpressions") or []:
+                    admitted.update(expr["values"])
+        self.assertTrue({"hull-broker-gateway", "hull-broker-worker", "hull-broker-ingest"} <= admitted)
+        role = next(d for d in documents if d["kind"] == "ClusterRole"
+                    and d["metadata"]["name"] == "hull-broker-gateway")
+        self.assertIn({"apiGroups": [""], "resources": ["serviceaccounts"], "verbs": ["get"]}, role["rules"])
+        gateway = next(d for d in documents if d["kind"] == "Deployment"
+                       and d["metadata"]["name"] == "hull-broker-gateway")
+        env = {e["name"] for e in gateway["spec"]["template"]["spec"]["containers"][0]["env"]}
+        self.assertTrue({"HULL_LLM_BASE_URL", "HULL_AGENT_RUNTIME_URL", "HULL_TRUSTED_PROXY_CIDRS"} <= env)
+
     def test_disabled_render_is_identical_to_before_the_broker_template_existed(self) -> None:
         """The only permitted diff is the two harmless additions this feature
         makes to *existing* templates (the operator's serviceaccounts RBAC verb

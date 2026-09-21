@@ -72,12 +72,34 @@ Request body limit: `HULL_MAX_BODY_BYTES`, default 65536 (same as `SITES_REQUEST
 
 ### 3.1 Caller resolution
 
-- Browser calls on the app domain: app is resolved from the `Host` header via settings `hosts`.
-  Unknown host → 404 `unknown_app`.
+- Browser calls on the app domain, sign-in routes only (`/_hull/auth/*`, auth mode `site`): app is
+  resolved from the `Host` header via settings `hosts`. Unknown host → 404 `unknown_app`. Every
+  other route requires the app token (no app token → `401 app_token_required`), so browser code
+  on the app domain cannot call flows, agents or tools around the app backend.
 - Server calls from the app backend: `Authorization: Bearer <appToken>`; the end user, when
   acting for one, in `X-Hull-User: <userToken>` (must have `aud == app token sub`).
 - Admin calls: `Authorization: Bearer <HULL_BROKER_ADMIN_TOKEN (file: HULL_BROKER_ADMIN_TOKEN_FILE)>`,
   compared with `hmac.compare_digest`.
+
+### 3.1.1 How the app backend learns the end user
+
+The session cookie is HttpOnly, so browser code cannot read it; it is sent to the app backend
+too because it is the same origin. Two supported paths, both implemented by the SDK:
+1. The browser helper calls `POST /_hull/auth/token`, keeps the user token in memory until
+   `expiresAt`, and sends it to the app's own API as `Authorization: Bearer <userToken>`.
+2. The backend helper, when a request carries only the cookie, calls
+   `POST {HULL_BROKER_URL}/_hull/auth/token` server-to-server with that cookie and
+   `X-Hull-Host: <original Host>` plus its app token, then caches the result by the SHA-256
+   of the cookie until `expiresAt`. C accepts `X-Hull-Host` only together with a valid app
+   token whose app owns that host.
+Either way the backend verifies the user token locally against the JWKS.
+
+### 3.1.2 App-visible config — partition C
+
+`GET /_hull/v1/app-config` (app token) →
+`200 {"version","roles","default_role","permissions","plans","default_plan","entities","auth"}`
+taken from the active compiled config (no settings, no secrets). The SDK caches it for
+`Cache-Control: max-age` seconds set by C from `HULL_CONFIG_CACHE_SECONDS`.
 
 ### 3.2 End-user auth (browser, same origin) — partition C
 
@@ -90,9 +112,11 @@ Request body limit: `HULL_MAX_BODY_BYTES`, default 65536 (same as `SITES_REQUEST
 | `GET /_hull/.well-known/jwks.json` | — | JWKS |
 
 Registration modes from compiled config `auth.registration`: `open`, `invite`,
-`domain_allowlist` (settings `allowedEmailDomains`), `closed`. A code is only mailed when the
+`domain_allowlist` (settings `allowed_email_domains`), `closed`. A code is only mailed when the
 email may sign in. OTP: 6 digits, stored as HMAC, TTL `HULL_OTP_TTL_SECONDS` (default 600),
-max attempts `HULL_OTP_MAX_ATTEMPTS` (default 5), per-email and per-IP send limits configurable.
+wrong-code attempts per code `HULL_OTP_MAX_ATTEMPTS`, and per-email / per-IP send and verify
+limits with a window, all configurable; defaults follow the agent login limiter
+(`_LOGIN_FAILURES_LIMIT = 10` per `_LOGIN_WINDOW_SECONDS = 300`, agent `server/auth.py:45-46`).
 Session: opaque 32-byte token, only its SHA-256 stored, absolute TTL `HULL_SESSION_TTL_SECONDS`
 (default 28800, same as the site console session). Mailer is an interface; the slice ships a
 `DatabaseMailer` (rows in `broker_outbound_mail`, readable through the admin API) and tests use
@@ -105,14 +129,18 @@ an in-memory one.
 | `POST /_hull/v1/app-token` | `{"serviceAccountToken"}` | `200 {"token","expiresAt"}`; `401 invalid_workload` |
 
 Validation goes through a `TokenReviewer` interface: K8s `TokenReview` with
-`audiences=["hull-broker"]` using the in-cluster service account (partition B grants the RBAC);
-the authenticated `system:serviceaccount:<ns>:<sa>` is mapped to an app through settings
-`workloads: [{"namespace","serviceAccount","site"}]`. Tests use a fake reviewer.
+`audiences=["hull-broker"]` using the in-cluster service account (partition B grants the RBAC).
+The authenticated `system:serviceaccount:<ns>:<sa>` is mapped to an app through settings
+`workloads: [{"namespace","serviceAccount","site"}]` when present, otherwise through the
+annotations `hull.sites.local/app-env-id` and `hull.sites.local/site` that the operator writes on
+the per-site ServiceAccount (the gateway may `get` serviceaccounts); an app with no active config
+gets no token. Tests use a fake reviewer.
 
 ### 3.4 Runtime API — partition D (handlers), partition C (routing, auth)
 
 All require an app token. `X-Hull-User` is required unless the target runs `run_as: app`.
-Idempotency: `Idempotency-Key` header (≤ 128 chars) on POSTs that spend credits.
+Idempotency: `Idempotency-Key` header (≤ 128 chars) on POSTs that spend credits, scoped to the
+calling end user (or `app`): the same key from two users is two requests.
 
 | Method, path | Body | Result |
 |---|---|---|

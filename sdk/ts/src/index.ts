@@ -37,6 +37,8 @@ export interface HullOptions {
   appEnvId?: string;
   site?: string;
   now?: () => number;
+  /** Minimum gap between JWKS refetches triggered by an unknown `kid` (see JwksCache). */
+  jwksRefetchIntervalMs?: number;
 }
 
 interface AppTokenState {
@@ -147,7 +149,7 @@ export function createHull(options: HullOptions = {}) {
     }
     return (await response.json()) as Jwks;
   }
-  const jwksCache = new JwksCache(fetchJwks);
+  const jwksCache = new JwksCache(fetchJwks, options.jwksRefetchIntervalMs);
 
   async function getAppToken(): Promise<string> {
     if (appTokenState && appTokenState.expiresAt - APP_TOKEN_REFRESH_MARGIN_SECONDS > now()) {

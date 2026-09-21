@@ -123,6 +123,14 @@ existingSecrets:
     database:
       name: hull-broker-db-auth
       passwordKey: password
+    # Optional: leave name empty when the model endpoint or the agent runtime
+    # needs no credential.
+    llmApiKey:
+      name: ""
+      key: api-key
+    agentProxySecret:
+      name: ""
+      key: secret
 
 buildPlane:
   enabled: true
@@ -141,6 +149,16 @@ broker:
     replicas: 1
   ingest:
     replicas: 1
+  # CIDRs of the proxies whose X-Forwarded-For the gateway believes (the Envoy data
+  # plane). Empty trusts none: every browser request then carries the proxy's own
+  # address and per-IP sign-in limits are shared by all visitors of an app.
+  trustedProxyCIDRs: ""
+  # OpenAI-compatible endpoint flows call; empty makes every flow return its fallback.
+  llm:
+    baseUrl: ""
+  # hullwork/agent deployment that runs app agents (AGENT_CALLER_TOOLS=1 there).
+  agentRuntime:
+    url: ""
   resources:
     requests:
       cpu: 25m

@@ -324,6 +324,26 @@ class AgentBridgeTests(unittest.TestCase):
         self.assertEqual(dict(remaining)["run.error"]["code"], "cancelled")
         self.assertEqual(len(_FakeAgentRuntimeHandler.cancels), 1)
 
+    def test_cancel_by_another_user_or_app_is_ignored(self) -> None:
+        _FakeAgentRuntimeHandler.script = [
+            {"type": "TEXT_MESSAGE_CONTENT", "delta": "first"},
+            {"type": "RUN_FINISHED"},
+        ]
+        events_iter = iter(agent_bridge.handle_run(self._request(), self.services).events)
+        run_id = next(events_iter)[1]["runId"]
+        other_user = EndUser(id="u" + "f" * 32, org=None, role="member", plan="free", env="dev")
+        for app_id, user in (("app1", other_user), ("app2", _user()), ("app1", None)):
+            cancel = Request(
+                method="POST", path=f"/_hull/v1/agents/triage/runs/{run_id}/cancel",
+                params={"name": "triage", "runId": run_id}, query={}, headers={}, body=None,
+                host="app.test", client_ip="127.0.0.1", cookies={},
+                app=AppCaller(app_env_id=app_id, site="s"), user=user, runtime=None,
+            )
+            self.assertEqual(agent_bridge.handle_cancel(cancel, self.services).status, 202)
+        remaining = [name for name, _ in events_iter]
+        self.assertEqual(remaining[-1], "run.finished")
+        self.assertEqual(_FakeAgentRuntimeHandler.cancels, [])
+
     def test_build_system_prompt_includes_guardrails(self) -> None:
         prompt = agent_bridge.build_system_prompt(AGENT_CONFIG)
         self.assertIn("never invent ticket ids", prompt)

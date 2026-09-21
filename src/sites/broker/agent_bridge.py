@@ -292,7 +292,8 @@ def _drive_run(
     total_credits = 0
     tool_names: dict[str, str] = {}
     cancel_state = {"cancelled": False}
-    _ACTIVE_RUNS[run_id] = {"thread_id": thread_id, "cancel": cancel_state}
+    _ACTIVE_RUNS[run_id] = {"thread_id": thread_id, "cancel": cancel_state,
+                            "app_env_id": app_env_id, "user": user_header}
     yield ("run.started", {"runId": run_id, "threadId": thread_id})
 
     if not base_url:
@@ -450,6 +451,12 @@ def handle_cancel(request: Request, services: Services) -> Response:
         raise HttpError(401, "unauthenticated", "an app token is required.")
     run_id = request.params.get("runId", "")
     active = _ACTIVE_RUNS.get(run_id)
+    caller = request.user.id if request.user else "app"
+    # Only the app and user that started a run may cancel it. A run that is not
+    # theirs answers exactly like one that is not active, so run ids cannot be probed.
+    if active is not None and (active["app_env_id"] != request.app.app_env_id
+                               or active["user"] != caller):
+        active = None
     if active is not None:
         active["cancel"]["cancelled"] = True
         base_url = os.environ.get("HULL_AGENT_RUNTIME_URL", "").rstrip("/")
@@ -458,7 +465,7 @@ def handle_cancel(request: Request, services: Services) -> Response:
                 "Content-Type": "application/json",
                 "X-Agent-Proxy-Secret": _read_proxy_secret(),
                 "X-Agent-Tenant": f"app.{request.app.app_env_id}",
-                "X-Agent-User": request.user.id if request.user else "app",
+                "X-Agent-User": caller,
             }
             _cancel_upstream(base_url, headers, active["thread_id"], run_id)
     return Response(202, {})

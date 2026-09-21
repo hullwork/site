@@ -74,6 +74,8 @@ export interface VerifyOptions {
   aud: string;
   /** Expected `typ` claim: `"app"` or `"user"`. */
   typ: string;
+  /** Expected `iss` claim; the Broker issues `"hull-broker"`. */
+  iss?: string;
   /** Clock-skew leeway, seconds (contract default 5, `HULL_TOKEN_LEEWAY_SECONDS`). */
   leewaySeconds?: number;
   now?: () => number;
@@ -101,6 +103,11 @@ export function verifyCompact(
   if (!ok) {
     throw new JwtError("signature verification failed");
   }
+  // Same issuer check the Broker applies (tokens.py): a JWKS shared with another
+  // issuer must not make its tokens acceptable here.
+  if (payload["iss"] !== (options.iss ?? "hull-broker")) {
+    throw new JwtError("unexpected token issuer");
+  }
   if (payload["typ"] !== options.typ) {
     throw new JwtError(`unexpected token typ; expected ${options.typ}`);
   }
@@ -119,16 +126,46 @@ export function verifyCompact(
 /**
  * Caches a JWKS document and refetches it when a `kid` it does not recognize is asked
  * for, so a key rotation on the Broker does not require restarting every app process.
+ *
+ * The `kid` comes from a token header that has not been verified yet, so anyone who
+ * can reach the app could otherwise turn each request carrying a made-up `kid` into
+ * a request to the Broker. Refetches for unknown keys are therefore at most one per
+ * `minRefetchIntervalMs`, and concurrent callers share one fetch. The default is
+ * provisional: it bounds how long a newly rotated key is refused, and can be changed
+ * through `createHull({ jwksRefetchIntervalMs })`.
  */
+export const DEFAULT_JWKS_REFETCH_INTERVAL_MS = 30_000;
+
 export class JwksCache {
   private jwks: Jwks | null = null;
+  private fetchedAt = -Infinity;
+  private inflight: Promise<Jwks> | null = null;
 
-  constructor(private readonly fetchJwks: () => Promise<Jwks>) {}
+  constructor(
+    private readonly fetchJwks: () => Promise<Jwks>,
+    private readonly minRefetchIntervalMs: number = DEFAULT_JWKS_REFETCH_INTERVAL_MS,
+    private readonly nowMs: () => number = () => Date.now(),
+  ) {}
 
   async get(kid?: string): Promise<Jwks> {
-    if (!this.jwks || (kid && !this.jwks.keys.some((key) => key.kid === kid))) {
-      this.jwks = await this.fetchJwks();
+    const known = this.jwks !== null && (!kid || this.jwks.keys.some((key) => key.kid === kid));
+    if (known) {
+      return this.jwks as Jwks;
     }
-    return this.jwks;
+    if (this.jwks !== null && this.nowMs() - this.fetchedAt < this.minRefetchIntervalMs) {
+      return this.jwks;
+    }
+    if (!this.inflight) {
+      this.inflight = this.fetchJwks()
+        .then((jwks) => {
+          this.jwks = jwks;
+          this.fetchedAt = this.nowMs();
+          return jwks;
+        })
+        .finally(() => {
+          this.inflight = null;
+        });
+    }
+    return this.inflight;
   }
 }

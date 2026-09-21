@@ -132,13 +132,13 @@ class LedgerTests(unittest.TestCase):
 
     def test_idempotent_replay_returns_the_same_reservation_no_double_charge(self) -> None:
         first = self.ledger.reserve(
-            app_env_id="app1", scope="flow:x", amount=10, idempotency_key="k1",
+            app_env_id="app1", scope="flow:x", amount=10, idempotency_key="k1", idempotency_owner="u1",
             user_subject=("user", "u1"), user_limit=10,
         )
         self.ledger.settle(first.id, app_env_id="app1", actual_amount=7, response={"ok": True})
 
         replay = self.ledger.reserve(
-            app_env_id="app1", scope="flow:x", amount=10, idempotency_key="k1",
+            app_env_id="app1", scope="flow:x", amount=10, idempotency_key="k1", idempotency_owner="u1",
             user_subject=("user", "u1"), user_limit=10,
         )
         self.assertTrue(replay.replayed)
@@ -152,15 +152,33 @@ class LedgerTests(unittest.TestCase):
 
     def test_idempotency_key_is_scoped_per_flow_not_global(self) -> None:
         a = self.ledger.reserve(
-            app_env_id="app1", scope="flow:a", amount=5, idempotency_key="shared",
+            app_env_id="app1", scope="flow:a", amount=5, idempotency_key="shared", idempotency_owner="u1",
             user_subject=("user", "u1"), user_limit=100,
         )
         b = self.ledger.reserve(
-            app_env_id="app1", scope="flow:b", amount=5, idempotency_key="shared",
+            app_env_id="app1", scope="flow:b", amount=5, idempotency_key="shared", idempotency_owner="u1",
             user_subject=("user", "u1"), user_limit=100,
         )
         self.assertNotEqual(a.id, b.id)
         self.assertFalse(b.replayed)
+
+    def test_the_same_key_from_another_user_is_not_a_replay(self) -> None:
+        first = self.ledger.reserve(
+            app_env_id="app1", scope="flow:x", amount=5, idempotency_key="client-uuid",
+            idempotency_owner="uA", user_subject=("org", "o1"), user_limit=100,
+        )
+        self.ledger.settle(first.id, app_env_id="app1", actual_amount=5, response={"secret": "A"})
+        second = self.ledger.reserve(
+            app_env_id="app1", scope="flow:x", amount=5, idempotency_key="client-uuid",
+            idempotency_owner="uB", user_subject=("org", "o1"), user_limit=100,
+        )
+        self.assertFalse(second.replayed)
+        self.assertNotEqual(second.id, first.id)
+        self.assertIsNone(second.response)
+
+    def test_an_idempotency_key_without_an_owner_is_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            self.ledger.reserve(app_env_id="app1", scope="flow:x", amount=5, idempotency_key="k")
 
     def test_concurrent_reservations_race_for_the_last_credits_exactly_one_wins(self) -> None:
         # Real threads, real PostgreSQL connections (BrokerDatabase opens one

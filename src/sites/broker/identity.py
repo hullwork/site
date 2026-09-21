@@ -5,6 +5,8 @@ service-account token is exchanged, through ``TokenReview``, for a Broker app to
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -62,6 +64,18 @@ class TokenReviewer:
         """
         raise NotImplementedError
 
+    def workload_annotations(self, namespace: str, name: str) -> dict[str, str]:
+        """The annotations on that ServiceAccount; empty when it cannot be read."""
+        return {}
+
+
+# Written by the site operator on each per-site ServiceAccount
+# (sites.k8s_resources.hull_service_account_resource). Tenants cannot edit
+# ServiceAccounts, so what these say was decided by the control plane.
+APP_ENV_ID_ANNOTATION = "hull.sites.local/app-env-id"
+SITE_ANNOTATION = "hull.sites.local/site"
+_APP_ENV_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
 
 def parse_service_account(username: str) -> tuple[str, str] | None:
     prefix = "system:serviceaccount:"
@@ -116,18 +130,35 @@ class KubeTokenReviewer(TokenReviewer):
             return None
         return username
 
+    def workload_annotations(self, namespace: str, name: str) -> dict[str, str]:
+        from sites.kube import ApiError
+
+        try:
+            account = self._kube().get(f"/api/v1/namespaces/{namespace}/serviceaccounts/{name}")
+        except (ApiError, RuntimeError):
+            return {}
+        annotations = (account.get("metadata") or {}).get("annotations") or {}
+        return {str(k): str(v) for k, v in annotations.items()}
+
 
 class FakeTokenReviewer(TokenReviewer):
     """Test double: a fixed map from opaque token string to Kubernetes username."""
 
     def __init__(self, tokens: dict[str, str] | None = None):
         self._tokens = dict(tokens or {})
+        self._annotations: dict[tuple[str, str], dict[str, str]] = {}
 
     def add(self, token: str, username: str) -> None:
         self._tokens[token] = username
 
+    def annotate(self, namespace: str, name: str, annotations: dict[str, str]) -> None:
+        self._annotations[(namespace, name)] = dict(annotations)
+
     def review(self, service_account_token: str) -> str | None:
         return self._tokens.get(service_account_token)
+
+    def workload_annotations(self, namespace: str, name: str) -> dict[str, str]:
+        return dict(self._annotations.get((namespace, name), {}))
 
 
 def issue_app_token_for_workload(db: broker_db.BrokerDatabase,
@@ -144,15 +175,24 @@ def issue_app_token_for_workload(db: broker_db.BrokerDatabase,
     namespace, service_account = parsed
     with db.transaction() as cursor:
         app_env_id = broker_db.app_env_id_for_workload(cursor, namespace, service_account)
-        if app_env_id is None:
-            return None
-        settings = broker_db.get_settings(cursor, app_env_id)
+        settings = broker_db.get_settings(cursor, app_env_id) if app_env_id else {}
     site = None
-    for workload in settings.get("workloads") or []:
-        if workload.get("namespace") == namespace and workload.get("serviceAccount") == service_account:
-            site = workload.get("site")
-            break
-    return broker_tokens.issue_app_token(keys, app_env_id, site)
+    if app_env_id is not None:
+        # An explicit workloads entry in the app's settings wins.
+        for workload in settings.get("workloads") or []:
+            if workload.get("namespace") == namespace and workload.get("serviceAccount") == service_account:
+                site = workload.get("site")
+                break
+        return broker_tokens.issue_app_token(keys, app_env_id, site)
+    annotations = reviewer.workload_annotations(namespace, service_account)
+    app_env_id = annotations.get(APP_ENV_ID_ANNOTATION, "")
+    if not _APP_ENV_ID_RE.fullmatch(app_env_id):
+        return None
+    with db.transaction() as cursor:
+        # Only an app that has been configured here can receive tokens.
+        if broker_db.get_active_version(cursor, app_env_id) is None:
+            return None
+    return broker_tokens.issue_app_token(keys, app_env_id, annotations.get(SITE_ANNOTATION) or None)
 
 
 def register(router: "Router", services: "Services") -> None:

@@ -7,6 +7,7 @@ the router's auth-mode resolution, and the JSON/cookie/SSE wire format.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 import unittest
@@ -269,6 +270,59 @@ class HostResolutionTests(_ServerCase):
             status, _, resp = self.call(method, path, body, {"Host": "known-host.test"})
             self.assertEqual(status, 401, path)
             self.assertEqual(resp["code"], "app_token_required", path)
+
+
+class ClientAddressTests(unittest.TestCase):
+    """Browser traffic arrives through the Envoy data plane; per-IP sign-in limits
+    must see the visitor, not the proxy, and must not trust a header the visitor wrote."""
+
+    def setUp(self) -> None:
+        import ipaddress
+
+        self.proxies = (ipaddress.ip_network("10.0.0.0/8"),)
+
+    def test_the_rightmost_untrusted_hop_is_the_client(self) -> None:
+        self.assertEqual(server.client_ip("10.1.2.3", "203.0.113.9", self.proxies), "203.0.113.9")
+        self.assertEqual(server.client_ip("10.1.2.3", "198.51.100.7, 203.0.113.9, 10.4.4.4",
+                                          self.proxies), "203.0.113.9")
+
+    def test_a_forwarded_header_from_an_untrusted_peer_is_ignored(self) -> None:
+        self.assertEqual(server.client_ip("198.51.100.1", "203.0.113.9", self.proxies), "198.51.100.1")
+
+    def test_nothing_is_trusted_by_default(self) -> None:
+        self.assertEqual(server.client_ip("10.1.2.3", "203.0.113.9", ()), "10.1.2.3")
+
+    def test_garbage_in_the_header_falls_back_to_the_peer(self) -> None:
+        self.assertEqual(server.client_ip("10.1.2.3", "not-an-ip", self.proxies), "10.1.2.3")
+
+    def test_the_setting_is_parsed_and_refuses_bad_entries(self) -> None:
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"HULL_TRUSTED_PROXY_CIDRS": "10.0.0.0/8, fd00::/8"}):
+            self.assertEqual(len(server.trusted_proxy_networks()), 2)
+        with mock.patch.dict(os.environ, {"HULL_TRUSTED_PROXY_CIDRS": "10.0.0.0/33"}):
+            with self.assertRaises(RuntimeError):
+                server.trusted_proxy_networks()
+
+
+class ForwardedClientThroughTheServerTests(_ServerCase):
+    def setUp(self) -> None:
+        from unittest import mock
+
+        patcher = mock.patch.dict(os.environ, {"HULL_TRUSTED_PROXY_CIDRS": "127.0.0.0/8"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+        def echo_ip(request):
+            return Response(200, {"ip": request.client_ip})
+
+        self.router.add("GET", "/_hull/test/ip", echo_ip, auth="none")
+
+    def test_the_handler_sees_the_forwarded_client(self) -> None:
+        status, _, body = self.call("GET", "/_hull/test/ip", headers={"X-Forwarded-For": "203.0.113.9"})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["ip"], "203.0.113.9")
 
 
 class UserTokenAuthTests(_ServerCase):
