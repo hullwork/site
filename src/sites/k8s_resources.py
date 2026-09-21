@@ -542,6 +542,81 @@ def autoscaling_resources(
     ]
 
 
+# --- Hull Broker wiring (control plane) ---
+# See CONTRACT.md section 6 and docs/CONFIGURATION.md "Hull Broker wiring (control
+# plane)".
+HULL_TOKEN_EXPIRATION_ENV = "SITES_HULL_TOKEN_EXPIRATION_SECONDS"
+# The Kubernetes TokenRequest API this projected volume is built on refuses an
+# expirationSeconds below this floor outright (it does not clamp it up), so a
+# smaller declared value here would describe a token the apiserver will not
+# actually issue.
+HULL_TOKEN_MIN_EXPIRATION_SECONDS = 600
+HULL_TOKEN_MOUNT_PATH = "/var/run/hull"
+HULL_TOKEN_FILE = f"{HULL_TOKEN_MOUNT_PATH}/token"
+_HULL_APP_ENV_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def hull_token_expiration_seconds() -> int:
+    """TTL of the projected ``hull-token`` volume every tenant Pod mounts.
+
+    Read once per Deployment build, alongside this module's other env-sourced
+    GitOps configuration. Not tenant input, so a bad value is an operator
+    misconfiguration rather than a per-request ValidationError in the ordinary
+    sense: raising here fails every reconcile until it is corrected, the same
+    fail-closed shape as ``cluster_pod_cidr`` above -- a cluster-wide value that
+    silently fell back would be wrong for every tenant at once, not just one.
+    """
+    raw = (getenv(HULL_TOKEN_EXPIRATION_ENV, "") or "").strip()
+    if not raw:
+        return 3600
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValidationError(
+            f"{HULL_TOKEN_EXPIRATION_ENV}={raw!r} must be an integer number of "
+            "seconds"
+        ) from exc
+    if value < HULL_TOKEN_MIN_EXPIRATION_SECONDS:
+        raise ValidationError(
+            f"{HULL_TOKEN_EXPIRATION_ENV}={value} is below the Kubernetes minimum "
+            f"of {HULL_TOKEN_MIN_EXPIRATION_SECONDS} seconds for a projected "
+            "service-account token"
+        )
+    return value
+
+
+def hull_service_account_resource(
+    spec: dict[str, Any], namespace: str
+) -> dict[str, Any] | None:
+    """Per-SiteDeployment identity the tenant Pod presents to the Broker.
+
+    ``None`` when the Broker is disabled, so callers can treat this the same way
+    as ``route_resources``/``network_policy_resources`` extras: apply it only
+    when it is not ``None``, and nothing renders when the switch is off.
+
+    No RBAC bindings on purpose: this ServiceAccount's only use is proving, via
+    TokenReview, which (namespace, name) pair a request came from (CONTRACT.md
+    section 3.3). The Broker maps that pair to an app through its own
+    ``workloads:`` setting -- the authorization boundary lives there, not in any
+    Kubernetes permission this ServiceAccount would otherwise hold, so granting
+    it none narrows the blast radius of a compromised workload without taking
+    anything away from the mechanism that actually decides trust.
+    """
+    if not exposure_backend.hull_broker_enabled():
+        return None
+    cr_name = cr_name_for(spec["merchantID"], spec["userID"], spec["serviceName"])
+    return {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {
+            "name": cr_name,
+            "namespace": namespace,
+            "labels": workload_labels(spec["serviceName"]),
+        },
+        "automountServiceAccountToken": False,
+    }
+
+
 def deployment_resource(spec: dict[str, Any], namespace: str) -> dict[str, Any]:
     service_name = spec["serviceName"]
     port = int(spec["port"])
@@ -632,6 +707,51 @@ def deployment_resource(spec: dict[str, Any], namespace: str) -> dict[str, Any]:
     declared_names = {str(item.get("name", "")) for item in declared_env}
     env = [item for item in env if item["name"] not in declared_names]
     env.extend(declared_env)
+
+    service_account = hull_service_account_resource(spec, namespace)
+    if service_account is not None:
+        user_id = str(spec.get("userID") or "")
+        hull_env = {
+            "HULL_BROKER_URL": getenv("SITES_HULL_BROKER_URL", "") or "",
+            "HULL_TOKEN_FILE": HULL_TOKEN_FILE,
+            "HULL_APP_ENV_ID": (
+                user_id if _HULL_APP_ENV_ID_RE.fullmatch(user_id) else ""
+            ),
+            "HULL_SITE": service_name,
+        }
+        # Unlike HOME/PORT above, caller-declared env with the same name loses
+        # here instead of winning: these four are the workload's identity to the
+        # Broker, not application configuration the tenant owns. A workload that
+        # could override its own HULL_APP_ENV_ID could ask the Broker to act as
+        # another tenant's environment, and one that could override
+        # HULL_BROKER_URL could point its own traffic at an address of its
+        # choosing while still presenting the real hull-token -- both are
+        # authorization bypasses, not preferences to honor.
+        env = [item for item in env if item["name"] not in hull_env]
+        env.extend({"name": key, "value": value} for key, value in hull_env.items())
+        volume_mounts.append(
+            {
+                "name": "hull-token",
+                "mountPath": HULL_TOKEN_MOUNT_PATH,
+                "readOnly": True,
+            }
+        )
+        volumes.append(
+            {
+                "name": "hull-token",
+                "projected": {
+                    "sources": [
+                        {
+                            "serviceAccountToken": {
+                                "path": "token",
+                                "audience": "hull-broker",
+                                "expirationSeconds": hull_token_expiration_seconds(),
+                            }
+                        }
+                    ],
+                },
+            }
+        )
     database = spec.get("database") or {}
     database_secret = str(database.get("secretName") or "")
     if database_secret:
@@ -836,6 +956,11 @@ def deployment_resource(spec: dict[str, Any], namespace: str) -> dict[str, Any]:
                     },
                 },
                 "spec": {
+                    **(
+                        {"serviceAccountName": service_account["metadata"]["name"]}
+                        if service_account is not None
+                        else {}
+                    ),
                     "automountServiceAccountToken": False,
                     "enableServiceLinks": False,
                     "terminationGracePeriodSeconds": 10,
@@ -1090,8 +1215,12 @@ def network_policy_resources(
     #   - <nodeIP>:5000 is blocked by except 192.168.0.0/16, provided that the node address falls within
     #     RFC1918 (the reference kubeadm nodes use a private cluster network).
     #     **If the node is a bare metal with a public IP address, this except is not true and hostPort 5000 will be reset.
-    #     Reachable** - the code cannot determine the node address, so it can only be recorded here. registry has no authentication this
-    #     The root cause remains unchanged.
+    #     Reachable** - the code cannot determine the node address, so it can only be recorded here. Port 5000 is
+    #     anonymous by design (node containerd pulls without credentials) but not unauthenticated in the open sense:
+    #     the L7 proxy in front of it (charts/site/templates/07-build-plane.yaml) enforces read-only at that port --
+    #     GET/HEAD on manifests and blobs only, everything else 403 -- while push/delete/enumeration require Basic
+    #     Auth on port 5002. The residual risk this note records is that anonymous *pull* reaches a wider network
+    #     than the RFC1918 boundary intends, not that the registry has no authentication anywhere.
     #   - Item 2 matches by Pod IP. Most CNIs decide where to go after DNAT and therefore use ClusterIP
     #     The Service that accesses this ns will hit it; if a CNI is determined before DNAT, this type of traffic will
     #     It will fall into Article 3 and be blocked by the except of Service CIDR. The performance is one of the bundle components.
@@ -1157,6 +1286,39 @@ def network_policy_resources(
                     }
                 ],
                 "ports": [{"protocol": "TCP", "port": 5432}],
+            }
+        )
+    if exposure_backend.hull_broker_enabled():
+        # Same rule shape as the sites-postgres block above, on the Broker's own
+        # port instead. Gated on the platform-wide toggle rather than a per-spec
+        # field: unlike the database secret (opted into per site), every tenant
+        # workload gets HULL_BROKER_URL (k8s_resources.deployment_resource) once
+        # the Broker is enabled, so every tenant NetworkPolicy needs the matching
+        # egress or that URL just times out.
+        egress_rules.append(
+            {
+                "to": [
+                    {
+                        "namespaceSelector": {
+                            "matchLabels": {
+                                "kubernetes.io/metadata.name": CONTROL_NAMESPACE
+                            }
+                        },
+                        "podSelector": {
+                            "matchLabels": {
+                                "app.kubernetes.io/name": (
+                                    exposure_backend.HULL_BROKER_GATEWAY_NAME
+                                )
+                            }
+                        },
+                    }
+                ],
+                "ports": [
+                    {
+                        "protocol": "TCP",
+                        "port": exposure_backend.HULL_BROKER_GATEWAY_PORT,
+                    }
+                ],
             }
         )
     return [

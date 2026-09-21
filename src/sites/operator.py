@@ -40,6 +40,7 @@ from sites.k8s_resources import (
     artifact_configmap_resource,
     autoscaling_resources,
     deployment_resource,
+    hull_service_account_resource,
     namespace_resource,
     network_policy_resources,
     resource_quota_resource,
@@ -95,6 +96,44 @@ def _activator_grant_resource(namespaces: list[str]) -> dict[str, Any]:
                     "group": "",
                     "kind": "Service",
                     "name": exposure.ACTIVATOR_SERVICE,
+                }
+            ],
+        },
+    }
+HULL_BROKER_GRANT_NAME = "hull-broker-from-tenants"
+
+
+def _hull_broker_grant_resource(namespaces: list[str]) -> dict[str, Any]:
+    """Allow HTTPRoutes in these Namespaces to reference the Broker's Service.
+
+    Same shape as ``_activator_grant_resource`` and for the same reason: the
+    ``/_hull/`` rules exposure.GatewayExposure.route_resources adds point at a
+    Service in the control-plane Namespace, and Gateway API requires a
+    ReferenceGrant there for a cross-namespace backendRef, or the whole
+    HTTPRoute -- not just those rules -- is marked ResolvedRefs=False.
+    """
+    return {
+        "apiVersion": "gateway.networking.k8s.io/v1beta1",
+        "kind": "ReferenceGrant",
+        "metadata": {
+            "name": HULL_BROKER_GRANT_NAME,
+            "namespace": CONTROL_NAMESPACE,
+            "labels": {"app.kubernetes.io/managed-by": "sites-operator"},
+        },
+        "spec": {
+            "from": [
+                {
+                    "group": "gateway.networking.k8s.io",
+                    "kind": "HTTPRoute",
+                    "namespace": namespace,
+                }
+                for namespace in namespaces
+            ],
+            "to": [
+                {
+                    "group": "",
+                    "kind": "Service",
+                    "name": exposure.HULL_BROKER_GATEWAY_NAME,
                 }
             ],
         },
@@ -900,6 +939,19 @@ class Operator:
             quota,
         )
 
+        # Hull Broker identity, only when the Broker is enabled: no RBAC, just an
+        # identity the Pod can present through TokenReview (CONTRACT.md section
+        # 3.3). Applied before the Deployment below, which sets
+        # spec.template.spec.serviceAccountName to it when it exists.
+        service_account = hull_service_account_resource(spec, namespace)
+        if service_account is not None:
+            sa_name = service_account["metadata"]["name"]
+            self.kube.create_or_patch(
+                f"/api/v1/namespaces/{namespace}/serviceaccounts",
+                f"/api/v1/namespaces/{namespace}/serviceaccounts/{sa_name}",
+                service_account,
+            )
+
         service_name = spec["serviceName"]
         # The exposed service allocates a NodePort from the port pool. Apply Service first, bypassing the API directly
         # The built CR will fail before leaving the Deployment or artifact ConfigMap; normal
@@ -1027,6 +1079,15 @@ class Operator:
             paths = [
                 f"/apis/apps/v1/namespaces/{namespace}/deployments/{service_name}",
                 f"/api/v1/namespaces/{namespace}/services/{service_name}",
+                # Always listed, like the ScaledObject path below: a site deleted
+                # after the Broker was switched off would otherwise leave this
+                # ServiceAccount behind forever, since hull_service_account_resource
+                # returns None once disabled and can no longer name it. 404 is
+                # filtered below either way.
+                (
+                    f"/api/v1/namespaces/{namespace}/serviceaccounts/"
+                    f"{cr['metadata']['name']}"
+                ),
                 *(
                     f"/apis/{item['apiVersion']}/namespaces/{namespace}/"
                     f"{str(item['kind']).lower()}s/{item['metadata']['name']}"
@@ -1412,6 +1473,54 @@ class Operator:
         except RuntimeError as exc:
             telemetry.log_exception("activator_grant_failed", exc)
 
+    def _reconcile_hull_broker_grant(self) -> None:
+        """Maintain cross-namespace reference permissions for the Hull Broker.
+
+        Same reasoning as ``_reconcile_activator_grant``: ReferenceGrant's
+        ``from[].namespace`` only accepts specific names, and the tenant
+        Namespace collection changes as sites are created and deleted, so a
+        static list cannot express it and this is rewritten every round instead.
+
+        Unlike the activator grant, this one is not limited to scale-to-zero
+        sites: exposure.GatewayExposure.route_resources adds the ``/_hull/``
+        rules to every public gateway-backed HTTPRoute once the Broker is
+        enabled, whether or not that site itself scales to zero.
+        """
+        if exposure.backend().name != "gateway" or not exposure.hull_broker_enabled():
+            return
+        try:
+            payload = self.kube.get(COLLECTION_PATH) or {}
+        except (ApiError, RuntimeError) as exc:
+            telemetry.log_exception("hull_broker_grant_list_failed", exc)
+            return
+
+        namespaces = sorted(
+            {
+                str((item.get("status") or {}).get("namespace") or "")
+                for item in (payload.get("items") or [])
+                if str((item.get("spec") or {}).get("exposure", "public")) == "public"
+            }
+            - {""}
+        )
+        collection = (
+            "/apis/gateway.networking.k8s.io/v1beta1/namespaces/"
+            f"{CONTROL_NAMESPACE}/referencegrants"
+        )
+        path = f"{collection}/{HULL_BROKER_GRANT_NAME}"
+        try:
+            if not namespaces:
+                self.kube.delete(path)
+                return
+            self.kube.create_or_patch(
+                collection, path, _hull_broker_grant_resource(namespaces)
+            )
+        except ApiError as exc:
+            if exc.status == 404:
+                return
+            telemetry.log_exception("hull_broker_grant_failed", exc)
+        except RuntimeError as exc:
+            telemetry.log_exception("hull_broker_grant_failed", exc)
+
     def run_once(self) -> None:
         # One trace per sweep. The operator has no inbound request to inherit from, so the
         # unit that is worth correlating is the sweep itself: without this, its log lines
@@ -1434,6 +1543,7 @@ class Operator:
         finally:
             tracing.release(token)
         self._reconcile_activator_grant()
+        self._reconcile_hull_broker_grant()
 
     def run_forever(self) -> None:
         telemetry.log(

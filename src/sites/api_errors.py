@@ -13,6 +13,7 @@ from sites.admission import (
     MerchantQuotaExceeded,
     PublicRouteConflict,
     QuotaExceeded,
+    RevisionConflict,
     ServiceNameConflict,
 )
 from sites.kube import ApiError
@@ -29,6 +30,7 @@ MUTATION_ERROR_RESPONSES: ErrorResponseTable = (
     (QuotaExceeded, 429, "quota_exceeded", None),
     (PublicRouteConflict, 409, "public_route_capacity", None),
     (ServiceNameConflict, 409, "service_name_conflict", None),
+    (RevisionConflict, 409, "revision_conflict", None),
     (StorageConflictError, 409, "site_version_conflict", None),
     (ControlPlaneBusy, 503, "control_plane_busy", "control plane busy, retry later"),
     (StorageError, 503, None, "database unavailable"),
@@ -42,6 +44,11 @@ BUILD_ERROR_RESPONSES: ErrorResponseTable = (
     (QuotaExceeded, 429, "quota_exceeded", None),
     (PublicRouteConflict, 409, "public_route_capacity", None),
     (ServiceNameConflict, 409, "service_name_conflict", None),
+    # /v1/builds accepts no expectedRevision and never raises this itself; kept
+    # in step with the shared table anyway (see ErrorResponseTableTests in
+    # tests/test_sites.py) so the two tables cannot silently answer the same
+    # exception differently if a future change routes it through both.
+    (RevisionConflict, 409, "revision_conflict", None),
     (StorageConflictError, 409, "site_version_conflict", None),
     (BuildNameExists, 409, "build_name_exists", None),
     (BuildCapacityExceeded, 429, "build_capacity", None),

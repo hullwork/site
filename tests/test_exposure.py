@@ -313,6 +313,79 @@ class RouteResourceTest(unittest.TestCase):
             self.assertNotIn(".", label, host)
         self.assertNotEqual(host_a, host_b, "The first 46 characters of the same long name hit the same host")
 
+
+@contextmanager
+def using_hull_broker(enabled: bool):
+    """Temporarily set SITES_HULL_BROKER_ENABLED, same rationale as using_backend."""
+    previous = os.environ.get("SITES_HULL_BROKER_ENABLED")
+    os.environ["SITES_HULL_BROKER_ENABLED"] = "1" if enabled else "0"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("SITES_HULL_BROKER_ENABLED", None)
+        else:
+            os.environ["SITES_HULL_BROKER_ENABLED"] = previous
+
+
+class HullBrokerRouteTest(unittest.TestCase):
+    """B4: extra HTTPRoute rules ahead of the tenant's own, Broker-enabled only."""
+
+    def test_disabled_leaves_the_route_exactly_as_today(self) -> None:
+        previous = os.environ.pop("SITES_HULL_BROKER_ENABLED", None)
+        try:
+            with using_backend("gateway"):
+                unset = route_resources(_spec(), "ulocal-local")
+            with using_backend("gateway"), using_hull_broker(False):
+                explicitly_off = route_resources(_spec(), "ulocal-local")
+        finally:
+            if previous is not None:
+                os.environ["SITES_HULL_BROKER_ENABLED"] = previous
+        self.assertEqual(unset, explicitly_off)
+        self.assertEqual(len(unset[0]["spec"]["rules"]), 1)
+
+    def test_enabled_adds_three_rules_ahead_of_the_catch_all(self) -> None:
+        with using_backend("gateway"), using_hull_broker(True):
+            route = route_resources(_spec(), "ulocal-local")[0]
+        rules = route["spec"]["rules"]
+        self.assertEqual(len(rules), 4)
+        matches = [r["matches"][0]["path"] for r in rules]
+        self.assertEqual(
+            matches,
+            [
+                {"type": "PathPrefix", "value": "/_hull/"},
+                {"type": "Exact", "value": "/.well-known/agent-card.json"},
+                {"type": "Exact", "value": "/.well-known/oauth-protected-resource"},
+                {"type": "PathPrefix", "value": "/"},
+            ],
+        )
+        for rule in rules[:3]:
+            backend_ref = rule["backendRefs"][0]
+            self.assertEqual(backend_ref["name"], exposure.HULL_BROKER_GATEWAY_NAME)
+            self.assertEqual(backend_ref["namespace"], exposure.CONTROL_NAMESPACE)
+            self.assertEqual(backend_ref["port"], exposure.HULL_BROKER_GATEWAY_PORT)
+
+    def test_hull_rules_still_point_to_the_broker_when_scaled_to_zero(self) -> None:
+        """Sign-in must not require first waking the tenant's own Deployment."""
+        with using_backend("gateway"), using_hull_broker(True):
+            route = route_resources(_spec(scaleToZero=True), "ulocal-local")[0]
+        rules = route["spec"]["rules"]
+        hull_backend_names = {r["backendRefs"][0]["name"] for r in rules[:3]}
+        self.assertEqual(hull_backend_names, {exposure.HULL_BROKER_GATEWAY_NAME})
+        # The catch-all "/" rule is the one that still goes to the activator.
+        self.assertEqual(rules[3]["backendRefs"][0]["name"], exposure.ACTIVATOR_SERVICE)
+
+    def test_nodeport_backend_never_gets_hull_rules(self) -> None:
+        with using_backend("nodeport"), using_hull_broker(True):
+            self.assertEqual(route_resources(_spec(), "ulocal-local"), [])
+
+    def test_internal_site_never_gets_hull_rules_either(self) -> None:
+        with using_backend("gateway"), using_hull_broker(True):
+            self.assertEqual(
+                route_resources(_spec(exposure="internal"), "ulocal-local"), []
+            )
+
+
 class NetworkPolicyTest(unittest.TestCase):
     """🔴 The most hidden aspect of renovation."""
 

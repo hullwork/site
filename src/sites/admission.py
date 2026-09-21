@@ -72,6 +72,15 @@ class ServiceNameConflict(RuntimeError):
     """
 
 
+class RevisionConflict(RuntimeError):
+    """Raised when a caller's ``expectedRevision`` does not match the current CR.
+
+    CONTRACT.md section 6: an optimistic-concurrency precondition on
+    ``POST /v1/deployments``, not a desired-state field -- see
+    ``normalize_deploy_payload`` for why it never reaches ``DEPLOY_FIELDS``.
+    """
+
+
 class BuildNameExists(RuntimeError):
     """Raised when a live SiteBuild already occupies this service name.
 

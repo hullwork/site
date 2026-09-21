@@ -1,0 +1,407 @@
+# Hull Broker: the per-app runtime the Kubernetes wiring in 10-control-plane.yaml
+# (per-SiteDeployment ServiceAccount) and k8s_resources.py/exposure.py (env
+# injection, NetworkPolicy, HTTPRoute rules, ReferenceGrant) connect tenant
+# workloads to. See CONTRACT.md section 6 and docs/CONFIGURATION.md
+# "Hull Broker wiring (control plane)".
+#
+# Off by default (broker.enabled=false): nothing in this file renders, and
+# nothing else in the chart references objects defined here, so an install that
+# never sets broker.enabled sees no difference from before this file existed.
+#
+# Three roles share one image (the same site-control image as sites-api/
+# sites-operator; the entry point is the only difference) and one Secret
+# contract: signing keys, a secret-box key, an admin token, and a database DSN,
+# all references to Secrets this chart does not create -- same policy as
+# existingSecrets.* above, extended under existingSecrets.hullBroker.
+{{- if .Values.broker.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hull-broker-gateway
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: hull-broker-gateway
+    app.kubernetes.io/part-of: sites
+# The gateway is the only role that calls the Kubernetes API (TokenReview, to
+# validate the hull-token a tenant workload presents -- CONTRACT.md section
+# 3.3), so it is the only one that needs its token mounted.
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hull-broker-worker
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: hull-broker-worker
+    app.kubernetes.io/part-of: sites
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hull-broker-ingest
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: hull-broker-ingest
+    app.kubernetes.io/part-of: sites
+automountServiceAccountToken: false
+---
+# TokenReview is a cluster-scoped API (it is not namespaced by the object being
+# reviewed -- it authenticates a bearer token), so this can only be a
+# ClusterRole/ClusterRoleBinding, unlike the namespaced Roles elsewhere in this
+# chart. Bound to the gateway ServiceAccount only: worker and ingest never see a
+# tenant-presented token, so they never need this.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hull-broker-gateway
+  labels:
+    app.kubernetes.io/name: hull-broker-gateway
+    app.kubernetes.io/part-of: sites
+rules:
+  - apiGroups:
+      - authentication.k8s.io
+    resources:
+      - tokenreviews
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hull-broker-gateway
+subjects:
+  - kind: ServiceAccount
+    name: hull-broker-gateway
+    namespace: {{ .Values.namespaces.control }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hull-broker-gateway
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hull-broker-gateway
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: hull-broker-gateway
+    app.kubernetes.io/part-of: sites
+spec:
+  # Stateless: end-user and app auth state lives in the Broker's own database
+  # (partition C, src/sites/broker/db.py), not in this process, so more than one
+  # replica is safe and is how this role is meant to scale.
+  replicas: {{ .Values.broker.gateway.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hull-broker-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hull-broker-gateway
+        app.kubernetes.io/part-of: sites
+    spec:
+      serviceAccountName: hull-broker-gateway
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: {{ include "site.image" (list .Values.images.control) }}
+          imagePullPolicy: {{ .Values.images.control.pullPolicy }}
+          command:
+            - python3
+            - -m
+            - sites.broker
+            - gateway
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            {{- include "site.hullBrokerDatabaseEnv" . | nindent 12 }}
+            - name: HULL_BROKER_SIGNING_KEYS_FILE
+              value: /var/run/hull-broker/signing-keys.json
+            - name: HULL_BROKER_SECRET_KEY_FILE
+              value: /var/run/hull-broker/secret-box-key
+            - name: HULL_BROKER_ADMIN_TOKEN_FILE
+              value: /var/run/hull-broker/admin-token
+            - name: SITES_LOG_FORMAT
+              value: json
+          # No httpGet probe: the gateway's only documented paths so far are
+          # under /_hull/ (CONTRACT.md section 3), and none of them is specified
+          # as an unauthenticated liveness surface. A bare TCP accept is a weaker
+          # signal but couples this chart to nothing partition C has not shipped
+          # yet; the JWKS or a dedicated health path is the natural upgrade once
+          # src/sites/broker/server.py exists.
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.broker.resources | nindent 12 }}
+          volumeMounts:
+            - name: hull-broker-secrets
+              mountPath: /var/run/hull-broker
+              readOnly: true
+      volumes:
+        - name: hull-broker-secrets
+          projected:
+            sources:
+              - secret:
+                  name: {{ .Values.existingSecrets.hullBroker.signingKeys.name }}
+                  items:
+                    - key: {{ .Values.existingSecrets.hullBroker.signingKeys.key }}
+                      path: signing-keys.json
+              - secret:
+                  name: {{ .Values.existingSecrets.hullBroker.secretBox.name }}
+                  items:
+                    - key: {{ .Values.existingSecrets.hullBroker.secretBox.key }}
+                      path: secret-box-key
+              - secret:
+                  name: {{ .Values.existingSecrets.hullBroker.adminToken.name }}
+                  items:
+                    - key: {{ .Values.existingSecrets.hullBroker.adminToken.key }}
+                      path: admin-token
+              - secret:
+                  name: {{ .Values.existingSecrets.hullBroker.database.name }}
+                  items:
+                    - key: {{ .Values.existingSecrets.hullBroker.database.passwordKey }}
+                      path: db-password
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hull-broker-gateway
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: hull-broker-gateway
+    app.kubernetes.io/part-of: sites
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: hull-broker-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Ingress only, mirroring 09-activator.yaml's policy: two sources, two reasons.
+#
+# Tenant Namespaces call HULL_BROKER_URL directly for server-to-server requests
+# (CONTRACT.md section 3.1); the Envoy data plane forwards the browser-facing
+# /_hull/ and /.well-known/ routes exposure.GatewayExposure.route_resources adds
+# to every public gateway HTTPRoute. Copying the NodePort-style "except Pod
+# CIDR" rule here would be wrong for the same reason it is wrong for the
+# activator (see that file's header comment): both sources here are Pods, not
+# addresses outside the cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hull-broker-gateway
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: hull-broker-gateway
+    app.kubernetes.io/part-of: sites
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: hull-broker-gateway
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              sites.local/managed: "true"
+      ports:
+        - protocol: TCP
+          port: 8080
+    - from:
+        # Data-plane Namespace, not the Namespace the Gateway object lives in --
+        # see 09-activator.yaml's header comment for why those two are not the
+        # same thing and why using the wrong one is a silent 502, not an error.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: {{ .Values.namespaces.gateway }}
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hull-broker-worker
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: hull-broker-worker
+    app.kubernetes.io/part-of: sites
+spec:
+  # Conservatively single-replica pending partition D's ledger/queue-claiming
+  # design (src/sites/broker/ledger.py, worker.py): unlike the gateway and
+  # ingest roles, nothing in CONTRACT.md states the worker's job-claiming is
+  # safe under concurrent consumers. Raise replicas once that is confirmed.
+  replicas: {{ .Values.broker.worker.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hull-broker-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hull-broker-worker
+        app.kubernetes.io/part-of: sites
+    spec:
+      serviceAccountName: hull-broker-worker
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: {{ include "site.image" (list .Values.images.control) }}
+          imagePullPolicy: {{ .Values.images.control.pullPolicy }}
+          command:
+            - python3
+            - -m
+            - sites.broker
+            - worker
+          env:
+            {{- include "site.hullBrokerDatabaseEnv" . | nindent 12 }}
+            - name: HULL_BROKER_SECRET_KEY_FILE
+              value: /var/run/hull-broker/secret-box-key
+            - name: SITES_LOG_FORMAT
+              value: json
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.broker.resources | nindent 12 }}
+          volumeMounts:
+            - name: hull-broker-secrets
+              mountPath: /var/run/hull-broker
+              readOnly: true
+      volumes:
+        - name: hull-broker-secrets
+          projected:
+            sources:
+              - secret:
+                  name: {{ .Values.existingSecrets.hullBroker.secretBox.name }}
+                  items:
+                    - key: {{ .Values.existingSecrets.hullBroker.secretBox.key }}
+                      path: secret-box-key
+              - secret:
+                  name: {{ .Values.existingSecrets.hullBroker.database.name }}
+                  items:
+                    - key: {{ .Values.existingSecrets.hullBroker.database.passwordKey }}
+                      path: db-password
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hull-broker-ingest
+  namespace: {{ .Values.namespaces.control }}
+  labels:
+    app.kubernetes.io/name: hull-broker-ingest
+    app.kubernetes.io/part-of: sites
+spec:
+  # Stateless like the gateway: ingest only writes rows tagged with their own
+  # identity (usage/ledger events), so more than one replica does not need
+  # coordination the way the worker's job claiming might.
+  replicas: {{ .Values.broker.ingest.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hull-broker-ingest
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hull-broker-ingest
+        app.kubernetes.io/part-of: sites
+    spec:
+      serviceAccountName: hull-broker-ingest
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ingest
+          image: {{ include "site.image" (list .Values.images.control) }}
+          imagePullPolicy: {{ .Values.images.control.pullPolicy }}
+          command:
+            - python3
+            - -m
+            - sites.broker
+            - ingest
+          env:
+            {{- include "site.hullBrokerDatabaseEnv" . | nindent 12 }}
+            - name: SITES_LOG_FORMAT
+              value: json
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            {{- toYaml .Values.broker.resources | nindent 12 }}
+          volumeMounts:
+            - name: hull-broker-secrets
+              mountPath: /var/run/hull-broker
+              readOnly: true
+      volumes:
+        - name: hull-broker-secrets
+          projected:
+            sources:
+              - secret:
+                  name: {{ .Values.existingSecrets.hullBroker.database.name }}
+                  items:
+                    - key: {{ .Values.existingSecrets.hullBroker.database.passwordKey }}
+                      path: db-password
+{{- end }}

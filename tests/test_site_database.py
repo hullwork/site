@@ -20,7 +20,7 @@ from sites.site_database import (
     role_database_config,
     site_data_config_from_env,
 )
-from sites.storage import DatabaseConfig
+from sites.storage import DatabaseConfig, StorageError
 from sites.migrations import SiteMigrationExecutor, validate_migration_artifact
 
 
@@ -218,6 +218,149 @@ class SiteDatabaseProvisionerTests(unittest.TestCase):
             connection.execute(f'DROP SCHEMA IF EXISTS "{binding.schema}" CASCADE')
             connection.execute(f'DROP ROLE IF EXISTS "{binding.reader_role}"')
             connection.execute(f'DROP ROLE IF EXISTS "{binding.runtime_role}"')
+
+
+class SiteDatabaseRoleLimitsTests(unittest.TestCase):
+    """B7: SITES_DB_ROLE_CONNECTION_LIMIT / SITES_DB_ROLE_STATEMENT_TIMEOUT_MS.
+
+    Both are GitOps-only, unset means no change from today (no CONNECTION LIMIT
+    clause, no role-level statement_timeout), and apply on both first CREATE and
+    later re-provisioning of an existing role. Run against real PostgreSQL: the
+    SQL shape (CONNECTION LIMIT syntax, ALTER ROLE ... SET) is exactly what a
+    fake connection cannot catch a typo in.
+    """
+
+    def _config(self) -> DatabaseConfig:
+        settings = _settings()
+        return DatabaseConfig(
+            host=str(settings["host"]),
+            port=int(settings["port"]),
+            dbname=str(settings["dbname"]),
+            user=str(settings["user"]),
+            password=str(settings["password"]),
+            sslmode=str(settings["sslmode"]),
+        )
+
+    def _binding(self) -> SiteDatabaseBinding:
+        suffix = uuid.uuid4().hex
+        return SiteDatabaseBinding.for_site("test", suffix, "dynamic")
+
+    def _connection_limit(self, role: str) -> int:
+        settings = _settings()
+        with psycopg.connect(**settings) as connection:
+            row = connection.execute(
+                "SELECT rolconnlimit FROM pg_roles WHERE rolname = %s", (role,)
+            ).fetchone()
+        assert row is not None
+        return int(row[0])
+
+    def _role_statement_timeout(self, role: str) -> str | None:
+        settings = _settings()
+        with psycopg.connect(**settings) as connection:
+            rows = connection.execute(
+                """
+                SELECT unnest(setconfig) FROM pg_db_role_setting
+                JOIN pg_roles ON pg_roles.oid = pg_db_role_setting.setrole
+                WHERE pg_roles.rolname = %s
+                """,
+                (role,),
+            ).fetchall()
+        for (entry,) in rows:
+            if entry.startswith("statement_timeout="):
+                return entry.split("=", 1)[1]
+        return None
+
+    def _provision(
+        self,
+        provisioner: SiteDatabaseProvisioner,
+        binding: SiteDatabaseBinding,
+        **env: str,
+    ) -> None:
+        with mock.patch.dict(os.environ, env, clear=False):
+            for key in (
+                "SITES_DB_ROLE_CONNECTION_LIMIT",
+                "SITES_DB_ROLE_STATEMENT_TIMEOUT_MS",
+            ):
+                if key not in env:
+                    os.environ.pop(key, None)
+            provisioner.provision(
+                binding, runtime_password="rp", reader_password="pp"
+            )
+
+    def test_unset_leaves_no_connection_limit_and_no_statement_timeout(self) -> None:
+        config = self._config()
+        binding = self._binding()
+        provisioner = SiteDatabaseProvisioner(config)
+        self.addCleanup(
+            SiteDatabaseProvisionerTests._cleanup, dict(_settings()), binding
+        )
+        self._provision(provisioner, binding)
+        self.assertEqual(self._connection_limit(binding.runtime_role), -1)
+        self.assertIsNone(self._role_statement_timeout(binding.runtime_role))
+
+    def test_connection_limit_applied_on_create(self) -> None:
+        config = self._config()
+        binding = self._binding()
+        provisioner = SiteDatabaseProvisioner(config)
+        self.addCleanup(
+            SiteDatabaseProvisionerTests._cleanup, dict(_settings()), binding
+        )
+        self._provision(provisioner, binding, SITES_DB_ROLE_CONNECTION_LIMIT="7")
+        self.assertEqual(self._connection_limit(binding.runtime_role), 7)
+        self.assertEqual(self._connection_limit(binding.reader_role), 7)
+
+    def test_connection_limit_applied_on_reprovision_of_an_existing_role(self) -> None:
+        config = self._config()
+        binding = self._binding()
+        provisioner = SiteDatabaseProvisioner(config)
+        self.addCleanup(
+            SiteDatabaseProvisionerTests._cleanup, dict(_settings()), binding
+        )
+        self._provision(provisioner, binding)
+        self.assertEqual(self._connection_limit(binding.runtime_role), -1)
+        # Re-provision the same (already-existing) role with the limit now set.
+        self._provision(provisioner, binding, SITES_DB_ROLE_CONNECTION_LIMIT="3")
+        self.assertEqual(self._connection_limit(binding.runtime_role), 3)
+
+    def test_statement_timeout_applied_on_create(self) -> None:
+        config = self._config()
+        binding = self._binding()
+        provisioner = SiteDatabaseProvisioner(config)
+        self.addCleanup(
+            SiteDatabaseProvisionerTests._cleanup, dict(_settings()), binding
+        )
+        self._provision(
+            provisioner, binding, SITES_DB_ROLE_STATEMENT_TIMEOUT_MS="12345"
+        )
+        self.assertEqual(
+            self._role_statement_timeout(binding.runtime_role), "12345"
+        )
+
+    def test_statement_timeout_applied_on_reprovision(self) -> None:
+        config = self._config()
+        binding = self._binding()
+        provisioner = SiteDatabaseProvisioner(config)
+        self.addCleanup(
+            SiteDatabaseProvisionerTests._cleanup, dict(_settings()), binding
+        )
+        self._provision(provisioner, binding)
+        self._provision(
+            provisioner, binding, SITES_DB_ROLE_STATEMENT_TIMEOUT_MS="500"
+        )
+        self.assertEqual(self._role_statement_timeout(binding.runtime_role), "500")
+
+    def test_non_positive_integer_refuses_rather_than_falling_back(self) -> None:
+        config = self._config()
+        binding = self._binding()
+        provisioner = SiteDatabaseProvisioner(config)
+        for bad in ("0", "-1", "not-a-number"):
+            with mock.patch.dict(
+                os.environ, {"SITES_DB_ROLE_CONNECTION_LIMIT": bad}
+            ):
+                with self.assertRaises(StorageError):
+                    provisioner.provision(
+                        binding, runtime_password="rp", reader_password="pp"
+                    )
 
 
 if __name__ == "__main__":

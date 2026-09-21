@@ -36,6 +36,44 @@ traffic ──► gateway or nodeport ──► activator or workload
 | Build | `builds.py`, build plane, and registry | Binary contexts or privileged tenant-controlled builds |
 | Agent interface | `client.py`, CLI, and MCP | Bypassing the control plane or fabricating readiness evidence |
 | Console | `console/` | Direct Kubernetes or database access from the browser |
+| Hull Broker wiring | `k8s_resources.py`, `exposure.py`, `operator.py` (per-CR ServiceAccount, env injection, NetworkPolicy, `/_hull/` HTTPRoute rules, ReferenceGrant); Broker process itself is `src/sites/broker/` | Sites does not run the Broker's auth, ledger, or agent logic; it only wires a tenant workload to one |
+
+## Hull Broker data path
+
+Off by default (`SITES_HULL_BROKER_ENABLED=0`, `broker.enabled: false`). Enabling both
+adds a second, narrower control-plane surface alongside the one described above: Sites
+still owns admission, quotas, and workload convergence; the Broker (CONTRACT.md,
+`src/sites/broker/`) owns end-user auth, app config, and AI usage for the tenant
+application that workload runs.
+
+```text
+ end user's browser
+        │
+        ▼
+ gateway ──PathPrefix /_hull/, /.well-known/*──► hull-broker-gateway (control ns)
+        │
+        └──everything else──► activator or the tenant workload, as today
+
+ tenant workload (in its own Namespace)
+        │  HULL_BROKER_URL + hull-token (ServiceAccount projected volume,
+        │  audience "hull-broker", NetworkPolicy egress to the gateway's port)
+        ▼
+ hull-broker-gateway ──TokenReview (cluster-scoped RBAC, gateway SA only)──► apiserver
+        │
+        ▼
+ hull-broker-{worker,ingest} (background: ledger, usage, mail -- no inbound Service)
+```
+
+Sites' half of this: `k8s_resources.deployment_resource` gives each tenant Pod the
+`hull-token` volume, the four `HULL_*` env vars (control-plane values, not overridable
+by the tenant's own declared `env`), and the matching NetworkPolicy egress;
+`exposure.GatewayExposure.route_resources` adds the `/_hull/` and `/.well-known/*`
+HTTPRoute rules ahead of the tenant's own route, so they resolve to the Broker even for
+a scaled-to-zero site; `operator._reconcile_hull_broker_grant` maintains the
+cross-namespace ReferenceGrant those rules need, the same pattern as the activator grant.
+None of this validates a token, terminates TLS for `/_hull/` traffic beyond what the
+shared Gateway already does, or knows anything about the Broker's own data model - that
+half is `src/sites/broker/`, reachable only through the HTTP contract in CONTRACT.md.
 
 ## Review rules
 

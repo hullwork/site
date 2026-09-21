@@ -487,7 +487,14 @@ def normalize_deploy_payload(
     # refuses unknown keys, and README/docs/AUTH.md state the rule as "refused,
     # not ignored". `artifact` is the mode selector, taken above, so it is
     # accepted here too.
-    unexpected = sorted(set(payload) - set(DEPLOY_FIELDS) - {"artifact"})
+    # expectedRevision is a precondition on this write (CONTRACT.md section 6),
+    # not desired state: it is compared against the current CR and then
+    # discarded, the same reason artifact is pulled out above rather than
+    # carried through DEPLOY_FIELDS into the CR spec. api_deployments.py reads
+    # it from the raw request body before calling this function.
+    unexpected = sorted(
+        set(payload) - set(DEPLOY_FIELDS) - {"artifact", "expectedRevision"}
+    )
     if unexpected:
         raise ValidationError(
             "unknown deployment field(s): " + ", ".join(unexpected)

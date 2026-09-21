@@ -122,6 +122,41 @@ grants nothing a credential does not already have, and defaulting it off would o
 an agent host's tools silently absent. Any value other than a boolean stops the process
 rather than being guessed at. Helm exposes it as `mcpEndpoint.enabled`.
 
+### Hull Broker wiring (control plane)
+
+Kubernetes-side wiring for the Hull Broker: the per-SiteDeployment identity, tenant
+workload env injection, NetworkPolicy, and gateway routing described in
+CONTRACT.md (this iteration's shared cross-repo contract, one level above this checkout) section 6. Off by default (`broker.enabled: false` in the
+Chart), so an install that never turns this on renders and behaves exactly as before it
+existed - see `tests/test_k8s_resources.py` for the byte-identical-when-disabled proof.
+The Broker's own process configuration (signing keys, token TTLs, OTP limits, and the
+rest of CONTRACT.md (this iteration's shared cross-repo contract, one level above this checkout) sections 2-5) belongs to partitions C and D, not
+here.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `SITES_HULL_BROKER_ENABLED` | `false` | Master switch. `true`/`false` (and the `1`/`yes`/`on` aliases `SITES_MCP_ENDPOINT_ENABLED` also accepts); any other value stops the process. When `true`, every tenant workload gets a `hull-token` projected volume, a per-CR ServiceAccount, `HULL_*` env, and the matching NetworkPolicy egress; when `false`, none of that renders |
+| `SITES_HULL_BROKER_URL` | empty | Cluster URL of the Broker gateway Service, copied into tenant containers as `HULL_BROKER_URL`. The Chart sets it from the Service this release creates (`http://hull-broker-gateway.<namespaces.control>.svc:8080`) whenever `broker.enabled` is true; a deployment routing tenants at a Broker outside this chart sets it directly |
+| `SITES_HULL_TOKEN_EXPIRATION_SECONDS` | `3600` | `expirationSeconds` of the projected `hull-token` volume every tenant Pod mounts at `/var/run/hull/token`. Rejected below `600`, the Kubernetes TokenRequest API's own floor - a smaller value here would describe a token the apiserver refuses to issue, not one that is merely short-lived |
+| `SITES_HULL_BROKER_SERVICE` | `hull-broker-gateway` | Name of the Broker gateway Service, used in the NetworkPolicy egress rule, the extra `/_hull/` HTTPRoute rules, and the ReferenceGrant the operator maintains for them. The Chart always creates a Service literally named `hull-broker-gateway`; overriding this without also renaming that Service is the same foot-gun `SITES_ACTIVATOR_SERVICE` already documents |
+| `SITES_HULL_BROKER_PORT` | `8080` | Port of the Broker gateway Service, used the same three places as `SITES_HULL_BROKER_SERVICE` |
+| `SITES_DB_ROLE_CONNECTION_LIMIT` | empty (no limit) | `CONNECTION LIMIT` applied to every site database role (`site_runtime_*`/`site_reader_*`) on creation, and reapplied on re-provisioning of an existing role. Must be a positive integer; anything else refuses rather than being guessed at |
+| `SITES_DB_ROLE_STATEMENT_TIMEOUT_MS` | empty (no limit) | Role-level `statement_timeout` in milliseconds (`ALTER ROLE ... SET statement_timeout`), applied the same way as the connection limit above. Independent of `SITES_DB_STATEMENT_TIMEOUT`/`SITES_DATA_DB_STATEMENT_TIMEOUT`, which bound one control-plane connection rather than every future session under a site's role |
+
+Both database role limits are GitOps configuration, not tenant input: they apply to every
+site a control plane provisions, the same "cluster-wide toggle" shape as the Broker
+switch above. Leaving either unset reproduces today's behavior exactly - no
+`CONNECTION LIMIT` clause and no role-level `statement_timeout` - so existing installs
+see no change until an operator opts in.
+
+`HULL_APP_ENV_ID`, `HULL_SITE`, and `HULL_TOKEN_FILE` (fixed at
+`/var/run/hull/token`) are not separately configurable: they are derived per-site from
+the SiteDeployment spec and always win over caller-declared environment variables with
+the same name - a workload that could override its own `HULL_APP_ENV_ID` or
+`HULL_BROKER_URL` could impersonate another tenant to the Broker or redirect its own
+traffic while still presenting a genuine `hull-token`, which is a security boundary, not
+tenant-owned application configuration like the plain `env` deploy field.
+
 ## Undocumented tuning variables
 
 Every `SITES_*` variable `src/sites/` reads now appears in a document or a Chart template;

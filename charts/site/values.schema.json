@@ -3,6 +3,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "broker",
     "buildPlane",
     "clusterNetwork",
     "database",
@@ -267,11 +268,111 @@
               "$ref": "#/$defs/secretKey"
             }
           }
+        },
+        "hullBroker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "signingKeys",
+            "secretBox",
+            "adminToken",
+            "database"
+          ],
+          "properties": {
+            "signingKeys": {
+              "$ref": "#/$defs/secretRef"
+            },
+            "secretBox": {
+              "$ref": "#/$defs/secretRef"
+            },
+            "adminToken": {
+              "$ref": "#/$defs/secretRef"
+            },
+            "database": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "passwordKey"
+              ],
+              "properties": {
+                "name": {
+                  "$ref": "#/$defs/secretName"
+                },
+                "passwordKey": {
+                  "$ref": "#/$defs/secretKey"
+                }
+              }
+            }
+          }
         }
       }
     },
     "buildPlane": {
       "$ref": "#/$defs/feature"
+    },
+    "broker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "gateway",
+        "worker",
+        "ingest",
+        "resources",
+        "database"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "gateway": {
+          "$ref": "#/$defs/replicaCount"
+        },
+        "worker": {
+          "$ref": "#/$defs/replicaCount"
+        },
+        "ingest": {
+          "$ref": "#/$defs/replicaCount"
+        },
+        "resources": {
+          "type": "object"
+        },
+        "database": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "port",
+            "name",
+            "user",
+            "sslmode"
+          ],
+          "properties": {
+            "host": {
+              "type": "string",
+              "minLength": 1
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "user": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sslmode": {
+              "type": "string",
+              "enum": ["", "require", "verify-ca", "verify-full", "disable"]
+            }
+          }
+        }
+      }
     },
     "gateway": {
       "type": "object",
@@ -427,6 +528,36 @@
       "minLength": 1,
       "maxLength": 253,
       "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "secretRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "key"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/secretName"
+        },
+        "key": {
+          "$ref": "#/$defs/secretKey"
+        }
+      }
+    },
+    "replicaCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas"
+      ],
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 16
+        }
+      }
     },
     "feature": {
       "type": "object",

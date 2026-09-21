@@ -18,6 +18,7 @@ from sites.admission import (
     COLLECTION_PATH,
     CONTROL_NAMESPACE,
     ControlPlaneBusy,
+    RevisionConflict,
     ServiceNameConflict,
     acquire_mutation_lock,
 )
@@ -135,8 +136,21 @@ class DeploymentsMixin:
         if quota is None:
             return
         try:
+            body = self._read_body() if payload is None else payload
+            # A precondition on this write, not desired state (CONTRACT.md
+            # section 6): read from the raw body rather than DEPLOY_FIELDS, and
+            # checked below against the current CR instead of ever reaching the
+            # CR spec. See normalize_deploy_payload for why the key is still
+            # allowed through unnormalized.
+            expected_revision = (
+                body.get("expectedRevision") if isinstance(body, dict) else None
+            )
+            if expected_revision is not None and not isinstance(
+                expected_revision, str
+            ):
+                raise ValidationError("expectedRevision must be a string")
             desired = site_deployment_resource(
-                self._read_body() if payload is None else payload,
+                body,
                 merchant_id,
                 user_id,
                 namespace=CONTROL_NAMESPACE,
@@ -171,6 +185,30 @@ class DeploymentsMixin:
                             "delete it through /v1/builds/"
                             f"{desired['spec']['serviceName']} before deploying "
                             "an image under the same name"
+                        )
+                if expected_revision is not None:
+                    # Checked inside the mutation lock, against the current CR --
+                    # not the database record, which can lag a Kubernetes write
+                    # it did not make (see the "Rollback" known limitation in
+                    # README.md). No current CR counts as a mismatch: a caller
+                    # naming a specific expected revision has stated a belief
+                    # about existing state, and "there is no such state" does not
+                    # satisfy it any more than a different revision would.
+                    try:
+                        current = self.kube.get(resource_path)
+                    except ApiError as exc:
+                        if exc.status != 404:
+                            raise
+                        current = None
+                    current_revision = (
+                        str((current.get("spec") or {}).get("revision") or "")
+                        if current is not None
+                        else None
+                    )
+                    if expected_revision != current_revision:
+                        raise RevisionConflict(
+                            f"expectedRevision {expected_revision!r} does not "
+                            "match the current SiteDeployment revision"
                         )
                 self._admit_and_assign_ports(
                     merchant_id, user_id, [desired], quota
