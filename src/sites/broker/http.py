@@ -116,3 +116,13 @@ class Services:
     config: ConfigStore
     keys: Any
     clock: Callable[[], float]
+    # Everything below this line is a C-side extension beyond the D-facing
+    # contract (contract section 4 only promises db/config/keys/clock). D's
+    # register() must not rely on these; they exist so C's own route modules
+    # (auth.py, identity.py, admin_api.py) can share one Services instance
+    # instead of server.py threading extra arguments through every register().
+    auth: Any = None
+    mailer: Any = None
+    reviewer: Any = None
+    admin_token: str = ""
+    dev_tokens_enabled: bool = False

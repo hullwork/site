@@ -188,6 +188,88 @@ invalid value generally raises at import time rather than falling back.
 | `SITES_GATEWAY_POD_LABEL_KEY` | `gateway.envoyproxy.io/owning-gateway-name` | Label that identifies this Gateway's data-plane Pods to the tenant NetworkPolicy |
 | `SITES_GATEWAY_POD_LABEL_VALUE` | `SITES_GATEWAY_NAME` | Value for that label |
 
+## Hull Broker (core)
+
+The Broker (`python -m sites.broker gateway|worker|ingest`) is a separate data-plane
+service from `sites-api`; its `HULL_*` variables are not `SITES_*` and are not covered
+by the `EnvironmentVariableDiscoverabilityTests` scan above (that scan reads only
+`src/sites/*.py`, not the `sites.broker` subpackage) -- this table is their only
+required record, per contract section 7. Partition ownership: db.py/tokens.py/
+secretbox.py/config_store.py/identity.py/auth.py/mailer.py/http.py/server.py/
+admin_api.py/`__main__.py`/worker.py/ingest.py are partition C's; ledger.py, llm.py,
+flows.py, tools.py, mcp_client.py, entities.py, agent_bridge.py, runtime_api.py are
+partition D's (see `docs/BROKER.md`).
+
+### Database (`db.py`)
+
+Mirrors `sites.storage.DatabaseConfig.from_env` field for field, under the `HULL_BROKER_DB_`
+prefix instead of `SITES_DB_`, plus one DSN escape hatch the site's own config does not have
+(meant for tests and for an operator who already assembles a libpq string elsewhere).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HULL_BROKER_DB_DSN` | empty | A full libpq connection string; when set it wins outright and none of the pieces below are read |
+| `HULL_BROKER_DB_HOST` | `sites-postgres` | Database host |
+| `HULL_BROKER_DB_PORT` | `5432` | Database port |
+| `HULL_BROKER_DB_NAME` | `hull_broker` | Database name |
+| `HULL_BROKER_DB_USER` | `hull_broker` | Database role |
+| `HULL_BROKER_DB_PASSWORD` / `HULL_BROKER_DB_PASSWORD_FILE` | required (one of the two) | Database password, inline or from a mounted file |
+| `HULL_BROKER_DB_SSLMODE` | `require` | One of `disable`/`require`/`verify-ca`/`verify-full`; `prefer`/`allow` are refused for the same reason `SITES_DB_SSLMODE` refuses them (a downgrading mode is not a decision) |
+| `HULL_BROKER_DB_CONNECT_TIMEOUT` | `5` | Seconds |
+| `HULL_BROKER_DB_STATEMENT_TIMEOUT` | `10` | Seconds; set as the session's `statement_timeout` |
+
+### Tokens (`tokens.py`) -- contract section 2
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HULL_BROKER_SIGNING_KEYS_FILE` | required, no default | JSON list of `{kid, private_key_pem, active}` Ed25519 keys; exactly one active, all still verify |
+| `HULL_TOKEN_LEEWAY_SECONDS` | `5` | Clock-skew leeway on `exp`/`iat`; same value the sandbox ticket uses |
+| `HULL_APP_TOKEN_TTL_SECONDS` | `600` | Same default as the sandbox scoped token |
+| `HULL_USER_TOKEN_TTL_SECONDS` | `600` | |
+
+### Secrets at rest (`secretbox.py`) -- contract section 3.7
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HULL_BROKER_SECRET_KEY_FILE` | required, no default | Raw 32-byte AES-256-GCM key; encrypts `PUT .../secrets/{name}` values |
+
+### Config store (`config_store.py`) -- contract sections 3.1.2 and 3.5
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HULL_CONFIG_CACHE_SECONDS` | `5` | How long a gateway process may keep serving an `AppRuntime` after an admin applies a new one, and the `Cache-Control: max-age` the SDK is told to honor for `GET /_hull/v1/app-config`. Not sourced from any existing `SITES_*` default -- see the comment on `config_store.cache_seconds_from_env` for the reasoning; report to the lead if a different value is wanted |
+
+### End-user auth (`auth.py`) -- contract section 3.2
+
+Rate-limit and attempt defaults are per `(appEnvId, email)` and `(appEnvId, clientIp)`
+fixed windows.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HULL_OTP_TTL_SECONDS` | `600` | OTP code lifetime |
+| `HULL_OTP_MAX_ATTEMPTS` | `5` | Wrong-code attempts allowed per issued code; not given a value by the contract, chosen conservatively |
+| `HULL_OTP_SEND_LIMIT` / `HULL_OTP_SEND_WINDOW_SECONDS` | `10` / `300` | `email/start` rate limit, both per-email and per-IP; mirrors the agent login limiter (`_LOGIN_FAILURES_LIMIT=10`, `_LOGIN_WINDOW_SECONDS=300`, agent `server/auth.py:45-46`) |
+| `HULL_OTP_VERIFY_LIMIT` / `HULL_OTP_VERIFY_WINDOW_SECONDS` | `10` / `300` | `email/verify` rate limit, same shape |
+| `HULL_SESSION_TTL_SECONDS` | `28800` | Absolute session cookie lifetime; same as the site console session |
+
+### HTTP gateway (`server.py`, `__main__.py`)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HULL_BROKER_HOST` | `0.0.0.0` | Bind address, every role |
+| `HULL_BROKER_PORT` | `8080` | Bind port, every role |
+| `HULL_MAX_BODY_BYTES` | `65536` | Same default as `SITES_REQUEST_MAX_BYTES` |
+| `HULL_MAX_INFLIGHT` | `64` | Same default as `SITES_ACTIVATOR_MAX_INFLIGHT` (contract section C7) |
+| `HULL_BROKER_ADMIN_TOKEN` / `HULL_BROKER_ADMIN_TOKEN_FILE` | required (one of the two), min 32 chars | Bearer credential for every `/_hull/admin/v1/*` route, compared with `hmac.compare_digest` |
+| `HULL_BROKER_DEV_TOKENS` | `0` | `1` enables `POST .../dev-app-token` and `GET .../mail`; both `404 not_available` otherwise |
+
+### Worker role (`worker.py`)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HULL_BROKER_WORKER_INTERVAL_SECONDS` | `60` | How often expired sessions/OTP codes/rate-limit buckets are deleted |
+| `HULL_BROKER_WORKER_STALE_SECONDS` | interval × 3 | Age at which `/healthz` turns unready -- "the last cycle finished within N seconds", not "the process is alive" |
+
 ## Current cleanup and remaining work
 
 Only canonical `SITES_*` environment variables and
