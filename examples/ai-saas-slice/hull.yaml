@@ -1,0 +1,73 @@
+# Vertical-slice fixture for the Hull runtime acceptance walk-through (contract section 0,
+# design doc section 九.1): one flow, one agent, a read-only entity tool, and a small
+# monthly credit budget. This is a fixture, not a product -- see server.mjs for what is
+# deliberately left out.
+apiVersion: hull/v1alpha1
+app: ai-saas-slice
+auth:
+  methods: [email_otp]
+  registration: open
+  visibility: login_required
+  organizations: false
+roles: [member]
+default_role: member
+plans:
+  free:
+    features: [triage]
+    limits:
+      ai_credits_month: 200
+default_plan: free
+entities:
+  tickets:
+    table: tickets
+    primary_key: id
+    columns: [id, title, body, status, owner_id]
+permissions:
+  member:
+    tickets:
+      actions: [read]
+secrets: []
+capabilities:
+  - alias: kb
+    kind: mcp
+    url: https://mcp.example.test/kb
+    tools: [search_docs]
+    credential: app
+    risk: read
+    pin: null
+agents:
+  triage:
+    instructions: prompts/triage.md
+    scope: classify one support ticket and suggest a reply
+    guardrails:
+      - never promise a refund
+      - never reveal another customer's data
+    model_tier: balanced
+    skills: []
+    tools: [entity:tickets.read, kb.search_docs]
+    run_as: end_user
+    requires_feature: null
+    budget:
+      max_credits_per_run: 30
+flows:
+  summarize_ticket:
+    mode: llm
+    model_tier: fast
+    prompt: prompts/summarize.md
+    input_schema:
+      type: object
+      properties:
+        title: { type: string }
+        body: { type: string }
+      required: [title, body]
+    output_schema:
+      type: object
+      properties:
+        summary: { type: string }
+      required: [summary]
+    fallback:
+      summary: ""
+    audience: server
+    requires_feature: null
+    budget:
+      max_credits_per_call: 10

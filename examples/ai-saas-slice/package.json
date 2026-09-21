@@ -1,0 +1,12 @@
+{
+  "name": "ai-saas-slice-example",
+  "private": true,
+  "type": "module",
+  "description": "Vertical-slice fixture server for the Hull runtime acceptance walk-through; not published.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@hull/sdk": "file:../../sdk/ts"
+  }
+}

@@ -188,6 +188,21 @@ invalid value generally raises at import time rather than falling back.
 | `SITES_GATEWAY_POD_LABEL_KEY` | `gateway.envoyproxy.io/owning-gateway-name` | Label that identifies this Gateway's data-plane Pods to the tenant NetworkPolicy |
 | `SITES_GATEWAY_POD_LABEL_VALUE` | `SITES_GATEWAY_NAME` | Value for that label |
 
+## Hull manifest and CLI
+
+The `hull` CLI (`sites.hullcli`, see [docs/HULL_MANIFEST.md](HULL_MANIFEST.md)) is a
+separate command from `sites`: it publishes a Hull app manifest to a Broker rather than
+deploying a workload to the Sites control plane, so it reads its own, non-`SITES_*`
+environment variable rather than extending the table above.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `HULL_BROKER_ADMIN_TOKEN_FILE` | empty | Path to a file holding the Broker admin token; overridden per invocation by `--admin-token-file`. The token itself is never a command-line value and is never written to stdout or stderr |
+
+This is tenant/agent-facing configuration in the sense of the table at the top of this
+document (a caller's own credential, supplied per invocation), not operator/GitOps state,
+so it is documented here rather than added to the chart.
+
 ## Current cleanup and remaining work
 
 Only canonical `SITES_*` environment variables and
