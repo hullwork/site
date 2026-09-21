@@ -311,6 +311,7 @@ fixed windows.
 | `HULL_BROKER_WORKER_INTERVAL_SECONDS` | `60` | How often expired sessions/OTP codes/rate-limit buckets are deleted |
 | `HULL_BROKER_WORKER_STALE_SECONDS` | interval × 3 | Age at which `/healthz` turns unready -- "the last cycle finished within N seconds", not "the process is alive" |
 | `HULL_TRUSTED_PROXY_CIDRS` | empty | Comma-separated CIDRs of the proxies in front of the gateway (the Envoy data plane). Only a request whose socket peer is inside one of them has its `X-Forwarded-For` read, and the client is the rightmost entry that is not itself a trusted proxy. Empty trusts no one: every browser request then carries the proxy's own address and the per-IP sign-in limits are shared by all visitors of an app. Chart value `broker.trustedProxyCIDRs` |
+| `HULL_RESERVATION_MAX_AGE_SECONDS` | `3600` (provisional) | Worker releases credit holds older than this. A gateway killed mid-call never settles its hold, which would count against the user's budget forever; the age sits well above the longest run because a hold released while its run is still going lets that run finish uncharged |
 
 ## Hull Broker (runtime)
 

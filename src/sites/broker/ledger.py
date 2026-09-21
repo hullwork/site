@@ -55,6 +55,10 @@ class BudgetExceeded(LedgerError):
         self.level = level
 
 
+class ReservationInProgress(LedgerError):
+    """The same idempotency key belongs to a call that has not finished yet."""
+
+
 class ReservationNotFound(LedgerError):
     def __init__(self, reservation_id: str) -> None:
         super().__init__(f"no such reservation: {reservation_id}")
@@ -209,6 +213,8 @@ class Ledger:
             # here would mean it rolled back for an unrelated reason after all.
             raise LedgerError("idempotent reservation vanished after a conflicting insert")
         reservation = self._row_to_reservation(row, replayed=True)
+        if reservation.status != "settled":
+            raise ReservationInProgress(idempotency_key)
         return Reservation(**{**reservation.__dict__, "app_env_id": app_env_id, "scope": scope})
 
     # -- public API ------------------------------------------------------
@@ -274,7 +280,19 @@ class Ledger:
                     row = cursor.fetchone()
                     if row is not None:
                         reservation = self._row_to_reservation(row, replayed=True)
-                        return Reservation(**{**reservation.__dict__, "app_env_id": app_env_id, "scope": scope})
+                        # Only a settled call has something to replay. A reservation
+                        # still held means the first call is running; one released
+                        # gave its credits back without an answer, so the retry is a
+                        # new call and must pass every budget check like one. Taking
+                        # the key off the old row keeps the unique index usable.
+                        if reservation.status == "settled":
+                            return Reservation(**{**reservation.__dict__, "app_env_id": app_env_id, "scope": scope})
+                        if reservation.status == "reserved":
+                            raise ReservationInProgress(idempotency_key)
+                        cursor.execute(
+                            "UPDATE broker_credit_reservations SET idempotency_key = NULL WHERE id = %s",
+                            (reservation.id,),
+                        )
 
                 # Generated before the budget checks below so every entry row can
                 # carry it directly. Safe: a BudgetExceeded raised partway through
@@ -424,6 +442,26 @@ class Ledger:
                 id=reservation_id, app_env_id=app_env_id, scope=scope, amount=int(amount),
                 period=period, status="released", settled_amount=None, response=None, replayed=False,
             )
+
+    def release_stale(self, max_age_seconds: float) -> int:
+        """Release reservations held longer than any call should run.
+
+        A gateway killed mid-call (OOM, SIGKILL, node loss) never reaches its settle,
+        and the hold would count against the user's budget forever. The age is set
+        well beyond the longest run, because a reservation released while its run is
+        still going makes that run's later settle a no-op.
+        """
+        cutoff = dt.datetime.fromtimestamp(self._clock() - max_age_seconds, tz=dt.timezone.utc)
+        with self._db.transaction() as cursor:
+            cursor.execute(
+                "SELECT id, app_env_id FROM broker_credit_reservations"
+                " WHERE status = 'reserved' AND created_at < %s",
+                (cutoff,),
+            )
+            rows = cursor.fetchall()
+        for reservation_id, app_env_id in rows:
+            self.release(reservation_id, app_env_id=app_env_id)
+        return len(rows)
 
     def usage(self, app_env_id: str, subject_type: str, subject_id: str, period: str) -> int:
         """Settled credits for one subject in one period (the ``GET /usage/me`` number)."""

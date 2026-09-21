@@ -106,14 +106,14 @@ class SettingsSecretsHostTests(unittest.TestCase):
         self.app_env_id = fx.app_env_id()
 
     def test_put_settings_merges_replaces_at_top_level_only(self) -> None:
-        self.store.put_settings(self.app_env_id, {"hosts": ["a.test"], "ai_enabled": True})
-        merged = self.store.put_settings(self.app_env_id, {"hosts": ["b.test"]})
-        self.assertEqual(merged["hosts"], ["b.test"])
+        self.store.put_settings(self.app_env_id, {"hosts": [f"{self.app_env_id[:8]}-a.test"], "ai_enabled": True})
+        merged = self.store.put_settings(self.app_env_id, {"hosts": [f"{self.app_env_id[:8]}-b.test"]})
+        self.assertEqual(merged["hosts"], [f"{self.app_env_id[:8]}-b.test"])
         self.assertTrue(merged["ai_enabled"])  # untouched key survives the merge
 
     def test_by_host_resolves_after_settings_put(self) -> None:
-        self.store.put_settings(self.app_env_id, {"hosts": ["resolve-me.test"]})
-        self.assertEqual(self.store.by_host("resolve-me.test"), self.app_env_id)
+        self.store.put_settings(self.app_env_id, {"hosts": [f"{self.app_env_id[:8]}-resolve-me.test"]})
+        self.assertEqual(self.store.by_host(f"{self.app_env_id[:8]}-resolve-me.test"), self.app_env_id)
         self.assertIsNone(self.store.by_host("never-set.test"))
 
     def test_secret_round_trips_through_the_store(self) -> None:

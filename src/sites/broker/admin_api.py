@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from datetime import date
 
+from sites.broker import db as broker_db
 from sites.broker.config_store import (
     ConfigStaleError,
     ConfigValidationError,
@@ -65,7 +66,11 @@ def register(router: Router, services: Services) -> None:
     def put_settings(request: Request) -> Response:
         app_env_id = _app_env_id(request.params)
         body = request.body if isinstance(request.body, dict) else {}
-        merged = config.put_settings(app_env_id, body)
+        try:
+            merged = config.put_settings(app_env_id, body)
+        except broker_db.SettingConflict as exc:
+            raise HttpError(409, f"{exc.kind}_taken",
+                            f"that {exc.kind} is already assigned to another app") from None
         return Response(200, merged)
 
     def put_secret(request: Request) -> Response:

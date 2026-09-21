@@ -65,6 +65,23 @@ def _apply_v3(cursor: Any) -> None:
 
 register_migration("runtime", 3, "agent thread ownership", _apply_v3)
 
+
+def _apply_v4(cursor: Any) -> None:
+    # Runs in flight, so a cancel that lands on another gateway replica can still
+    # find the run's thread and owner and forward the cancel to the agent runtime.
+    cursor.execute("""
+        CREATE TABLE broker_agent_runs (
+            run_id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            app_env_id TEXT NOT NULL,
+            user_key TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """)
+
+
+register_migration("runtime", 4, "agent runs in flight", _apply_v4)
+
 # In-process registry of runs currently being streamed, for the cancel route (see
 # the module docstring for its single-replica limitation).
 _ACTIVE_RUNS: dict[str, dict[str, Any]] = {}
@@ -72,6 +89,36 @@ _ACTIVE_RUNS: dict[str, dict[str, Any]] = {}
 
 class AgentRuntimeUnavailable(Exception):
     pass
+
+
+class AgentRuntimeRefused(Exception):
+    """The agent runtime answered the run request with an HTTP error."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(f"the agent runtime refused the run with status {status}")
+        self.status = status
+
+
+def _record_run(db: Any, run_id: str, thread_id: str, app_env_id: str, user_key: str) -> None:
+    with db.transaction() as cursor:
+        cursor.execute(
+            "INSERT INTO broker_agent_runs (run_id, thread_id, app_env_id, user_key) VALUES (%s, %s, %s, %s)",
+            (run_id, thread_id, app_env_id, user_key),
+        )
+
+
+def _forget_run(db: Any, run_id: str) -> None:
+    with db.transaction() as cursor:
+        cursor.execute("DELETE FROM broker_agent_runs WHERE run_id = %s", (run_id,))
+
+
+def _run_owner(db: Any, run_id: str) -> tuple[str, str, str] | None:
+    with db.transaction() as cursor:
+        cursor.execute(
+            "SELECT thread_id, app_env_id, user_key FROM broker_agent_runs WHERE run_id = %s", (run_id,),
+        )
+        row = cursor.fetchone()
+    return (row[0], row[1], row[2]) if row else None
 
 
 def _thread_owner(db: Any, thread_id: str) -> tuple[str, str] | None:
@@ -179,6 +226,9 @@ def _stream_agent_events(base_url: str, headers: dict[str, str], payload: dict[s
     )
     try:
         response = urllib.request.urlopen(request, timeout=timeout_seconds)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise AgentRuntimeRefused(exc.code) from exc
     except (urllib.error.URLError, OSError) as exc:
         raise AgentRuntimeUnavailable("the agent runtime could not be reached") from exc
     try:
@@ -225,8 +275,13 @@ def _post_tool_result(base_url: str, headers: dict[str, str], thread_id: str,
 def _handle_caller_tool_call(
     *, services: Services, gate_ctx: tools_mod.GateContext, wire_to_ref: dict[str, str],
     base_url: str, headers: dict[str, str], thread_id: str, value: dict[str, Any],
+    failed_calls: set[str],
 ) -> Iterator[tuple[str, dict[str, Any]]]:
     request_id = value.get("requestId")
+    call_id = str(value.get("toolCallId", ""))
+    # Every path below that does not post a successful result marks the call failed,
+    # so tool.finished reports what really happened.
+    failed_calls.add(call_id)
     wire_name = value.get("name", "")
     arguments = value.get("arguments") if isinstance(value.get("arguments"), dict) else {}
     raw_ref = wire_to_ref.get(wire_name)
@@ -263,6 +318,8 @@ def _handle_caller_tool_call(
     content = tools_mod.wrap_untrusted(result.content)
     if len(content) > DEFAULT_CALLER_TOOL_MAX_RESULT_CHARS:
         content = content[:DEFAULT_CALLER_TOOL_MAX_RESULT_CHARS]
+    if not result.is_error:
+        failed_calls.discard(call_id)
     _post_tool_result(base_url, headers, thread_id, request_id, content, result.is_error)
 
 
@@ -291,22 +348,30 @@ def _drive_run(
 
     total_credits = 0
     tool_names: dict[str, str] = {}
+    failed_calls: set[str] = set()
     cancel_state = {"cancelled": False}
-    _ACTIVE_RUNS[run_id] = {"thread_id": thread_id, "cancel": cancel_state,
-                            "app_env_id": app_env_id, "user": user_header}
-    yield ("run.started", {"runId": run_id, "threadId": thread_id})
-
-    if not base_url:
-        yield ("run.error", {"code": "upstream_error", "message": "the agent runtime is not configured."})
-        _ACTIVE_RUNS.pop(run_id, None)
-        ledger.settle(reservation.id, app_env_id=app_env_id, actual_amount=0)
-        return
-
+    # Set once the run has reached a terminal event. Anything else when the
+    # generator ends -- the client disconnected (GeneratorExit at a yield), an
+    # exception -- means the upstream run may still be going and must be cancelled.
+    finished = False
+    upstream_started = False
     try:
+        _ACTIVE_RUNS[run_id] = {"thread_id": thread_id, "cancel": cancel_state,
+                                "app_env_id": app_env_id, "user": user_header}
+        _record_run(services.db, run_id, thread_id, app_env_id, user_header)
+        yield ("run.started", {"runId": run_id, "threadId": thread_id})
+
+        if not base_url:
+            finished = True
+            yield ("run.error", {"code": "upstream_error", "message": "the agent runtime is not configured."})
+            return
+
+        upstream_started = True
         for event in _stream_agent_events(base_url, headers, payload, timeout_seconds=60.0):
             if cancel_state["cancelled"]:
                 # handle_cancel already forwarded the cancel to the agent runtime
                 # before flipping this flag; this loop only has to stop reading.
+                finished = True
                 yield ("run.error", {"code": "cancelled", "message": "the run was cancelled."})
                 return
 
@@ -322,18 +387,21 @@ def _drive_run(
                 yield ("tool.started", {"callId": call_id, "tool": tool_name})
             elif etype == "TOOL_CALL_RESULT":
                 call_id = str(event.get("toolCallId", ""))
-                yield ("tool.finished", {"callId": call_id, "tool": tool_names.get(call_id, ""), "ok": True})
+                yield ("tool.finished", {"callId": call_id, "tool": tool_names.get(call_id, ""),
+                                          "ok": call_id not in failed_calls})
             elif etype == "CUSTOM":
                 custom_name = event.get("name")
                 value = event.get("value") if isinstance(event.get("value"), dict) else {}
-                if custom_name == "agent/event" and value.get("type") == "usage" and tier is not None:
+                if custom_name == "agent/event" and value.get("type") == "usage":
                     usage = llm_mod.LLMUsage(
                         input_tokens=int(value.get("input") or 0),
                         output_tokens=int(value.get("output") or 0),
                         cached_tokens=int(value.get("cached") or 0),
+                        cache_write_tokens=int(value.get("cache_write") or 0),
                     )
                     total_credits += llm_mod.price_credits(tier, usage)
                     if total_credits > reservation.amount:
+                        finished = True
                         _cancel_upstream(base_url, headers, thread_id, run_id)
                         yield ("run.error", {"code": "budget_exhausted",
                                               "message": "the run exceeded its credit budget."})
@@ -342,29 +410,46 @@ def _drive_run(
                     for out_event in _handle_caller_tool_call(
                         services=services, gate_ctx=gate_ctx, wire_to_ref=wire_to_ref,
                         base_url=base_url, headers=headers, thread_id=thread_id, value=value,
+                        failed_calls=failed_calls,
                     ):
                         yield out_event
             elif etype == "RUN_FINISHED":
+                finished = True
                 yield ("run.finished", {"usage": {"credits": total_credits}})
                 return
             elif etype == "RUN_ERROR":
+                finished = True
                 yield ("run.error", {"code": event.get("code", "agent_error"),
                                       "message": event.get("message", "the agent run failed.")})
                 return
         # The stream ended without a RUN_FINISHED/RUN_ERROR frame.
+        finished = True
         yield ("run.error", {"code": "upstream_error", "message": "the agent run ended without a result."})
+    except AgentRuntimeRefused as refused:
+        finished = True
+        # 409: the thread already has a run (or its session lives on another agent
+        # replica); 429: the agent runtime is at capacity. Both are retryable and
+        # distinct from "could not be reached".
+        code = {409: "run_in_progress", 429: "agent_busy"}.get(refused.status, "upstream_error")
+        yield ("run.error", {"code": code, "message": "the agent runtime refused the run."})
     except AgentRuntimeUnavailable:
+        finished = True
         yield ("run.error", {"code": "upstream_error", "message": "the agent runtime could not be reached."})
     except Exception as exc:
         # The response is already a 200 event stream, so an unexpected failure can
-        # only be reported in-band; the upstream run is cancelled so it stops spending.
+        # only be reported in-band; the finally below cancels the upstream run.
         telemetry.log_exception("broker_agent_run_failed", exc, run_id=run_id)
-        _cancel_upstream(base_url, headers, thread_id, run_id)
         yield ("run.error", {"code": "internal_error", "message": "the agent run failed."})
     finally:
         _ACTIVE_RUNS.pop(run_id, None)
-        # Idempotent: whichever branch above already settled (or none did), this
-        # charges exactly what was metered and releases the rest of the hold.
+        if upstream_started and not finished and not cancel_state["cancelled"]:
+            _cancel_upstream(base_url, headers, thread_id, run_id)
+        try:
+            _forget_run(services.db, run_id)
+        except Exception as exc:
+            telemetry.log_exception("broker_agent_run_forget_failed", exc, run_id=run_id)
+        # Idempotent: charges exactly what was metered and releases the rest of the
+        # hold, on every exit including a client that went away mid-stream.
         ledger.settle(reservation.id, app_env_id=app_env_id, actual_amount=total_credits)
 
 
@@ -410,6 +495,12 @@ def handle_run(request: Request, services: Services) -> Response | StreamRespons
     if not isinstance(max_credits_per_run, int) or max_credits_per_run <= 0:
         raise HttpError(500, "misconfigured_agent", "this agent has no valid run budget.")
 
+    # Without a priced tier the run could not be metered at all, so it is refused
+    # before anything is reserved, the same outcome a flow gets (upstream_error).
+    tier = llm_mod.resolve_tier(runtime.settings.get("model_tiers"), agent_config.get("model_tier"))
+    if tier is None:
+        raise HttpError(503, "model_unavailable", "no model is configured for this agent's tier.")
+
     plans = runtime.config.get("plans") or {}
     user_limit = None
     if request.user is not None:
@@ -427,20 +518,26 @@ def handle_run(request: Request, services: Services) -> Response | StreamRespons
     except BudgetExceeded:
         raise HttpError(402, "budget_exhausted", "the user has no remaining AI credit budget.") from None
 
-    run_id = "run" + uuid.uuid4().hex
-    gate_ctx = tools_mod.GateContext(
-        runtime=runtime, user=request.user, run_as=run_as,
-        allowed_tools=frozenset(agent_config.get("tools") or []), ledger=ledger,
-        app_env_id=request.app.app_env_id, requires_feature=None,  # already checked above, once per run
-    )
-    tool_defs, wire_to_ref = build_tool_list(gate_ctx, agent_config)
-    tier = llm_mod.resolve_tier(runtime.settings.get("model_tiers"), agent_config.get("model_tier"))
-    model_name = tier.model if tier is not None else str(agent_config.get("model_tier") or "")
+    # The stream's own finally settles the reservation, but it only exists once the
+    # generator starts; anything that fails before then must give the hold back here.
+    try:
+        run_id = "run" + uuid.uuid4().hex
+        gate_ctx = tools_mod.GateContext(
+            runtime=runtime, user=request.user, run_as=run_as,
+            allowed_tools=frozenset(agent_config.get("tools") or []), ledger=ledger,
+            app_env_id=request.app.app_env_id, requires_feature=None,  # already checked above, once per run
+        )
+        tool_defs, wire_to_ref = build_tool_list(gate_ctx, agent_config)
+        model_name = tier.model
+        system_prompt = build_system_prompt(agent_config)
+    except BaseException:
+        ledger.release(reservation.id, app_env_id=request.app.app_env_id)
+        raise
 
     events = _drive_run(
         services=services, app_env_id=request.app.app_env_id, user_header=user_key, gate_ctx=gate_ctx,
         ledger=ledger, reservation=reservation, run_id=run_id, thread_id=thread_id, tool_defs=tool_defs,
-        wire_to_ref=wire_to_ref, system_prompt=build_system_prompt(agent_config), model_name=model_name,
+        wire_to_ref=wire_to_ref, system_prompt=system_prompt, model_name=model_name,
         input_text=input_text, tier=tier,
     )
     return StreamResponse(events=events)
@@ -450,22 +547,25 @@ def handle_cancel(request: Request, services: Services) -> Response:
     if request.app is None:
         raise HttpError(401, "unauthenticated", "an app token is required.")
     run_id = request.params.get("runId", "")
-    active = _ACTIVE_RUNS.get(run_id)
     caller = request.user.id if request.user else "app"
-    # Only the app and user that started a run may cancel it. A run that is not
-    # theirs answers exactly like one that is not active, so run ids cannot be probed.
-    if active is not None and (active["app_env_id"] != request.app.app_env_id
-                               or active["user"] != caller):
-        active = None
+    # The run may be streaming through another gateway replica, so its owner comes
+    # from the database, not from this process. Only the app and user that started
+    # it may cancel it; any other run answers like one that is not active, so run
+    # ids cannot be probed.
+    owner = _run_owner(services.db, run_id)
+    if owner is None or owner[1:] != (request.app.app_env_id, caller):
+        return Response(202, {})
+    thread_id = owner[0]
+    active = _ACTIVE_RUNS.get(run_id)
     if active is not None:
         active["cancel"]["cancelled"] = True
-        base_url = os.environ.get("HULL_AGENT_RUNTIME_URL", "").rstrip("/")
-        if base_url:
-            headers = {
-                "Content-Type": "application/json",
-                "X-Agent-Proxy-Secret": _read_proxy_secret(),
-                "X-Agent-Tenant": f"app.{request.app.app_env_id}",
-                "X-Agent-User": caller,
-            }
-            _cancel_upstream(base_url, headers, active["thread_id"], run_id)
+    base_url = os.environ.get("HULL_AGENT_RUNTIME_URL", "").rstrip("/")
+    if base_url:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Agent-Proxy-Secret": _read_proxy_secret(),
+            "X-Agent-Tenant": f"app.{request.app.app_env_id}",
+            "X-Agent-User": caller,
+        }
+        _cancel_upstream(base_url, headers, thread_id, run_id)
     return Response(202, {})

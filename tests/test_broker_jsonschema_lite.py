@@ -68,6 +68,13 @@ class ObjectTests(unittest.TestCase):
         self.assertEqual(js.validate({"a": "x", "b": 1}, schema), [])
 
 
+class AdditionalPropertiesWithoutPropertiesTests(unittest.TestCase):
+    def test_no_declared_properties_means_no_key_is_allowed(self) -> None:
+        schema = {"type": "object", "additionalProperties": False}
+        self.assertEqual(js.validate({}, schema), [])
+        self.assertNotEqual(js.validate({"anything": 1}, schema), [])
+
+
 class ArrayTests(unittest.TestCase):
     def test_items_validated_with_index_path(self) -> None:
         schema = {"type": "array", "items": {"type": "integer"}}

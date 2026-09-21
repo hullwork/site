@@ -71,11 +71,11 @@ class IssueAppTokenForWorkloadTests(unittest.TestCase):
         self.app_env_id = fx.app_env_id()
         with self.db.transaction() as cursor:
             broker_db.put_settings(cursor, self.app_env_id, {
-                "workloads": [{"namespace": "ns-x", "serviceAccount": "sa-x", "site": "svc-x"}],
+                "workloads": [{"namespace": f"ns-{self.app_env_id[:12]}", "serviceAccount": "sa-x", "site": "svc-x"}],
             })
 
     def test_known_workload_yields_a_scoped_app_token(self) -> None:
-        reviewer = identity.FakeTokenReviewer({"sa-tok": "system:serviceaccount:ns-x:sa-x"})
+        reviewer = identity.FakeTokenReviewer({"sa-tok": f"system:serviceaccount:ns-{self.app_env_id[:12]}:sa-x"})
         result = identity.issue_app_token_for_workload(self.db, self.keys, reviewer, "sa-tok")
         self.assertIsNotNone(result)
         token, _ = result

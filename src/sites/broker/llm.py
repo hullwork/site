@@ -40,6 +40,9 @@ class LLMUsage:
     input_tokens: int
     output_tokens: int
     cached_tokens: int = 0
+    # Prompt-cache writes are reported apart from input tokens and cost at least as
+    # much as input; there is no separate price yet, so they are billed as input.
+    cache_write_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -201,7 +204,7 @@ def resolve_tier(model_tiers: Any, tier: str) -> TierConfig | None:
 def price_credits(tier: TierConfig, usage: LLMUsage) -> int:
     """Credits for one call, rounded up to the nearest whole credit."""
     cost = (
-        (usage.input_tokens / 1000.0) * tier.input_credits_per_1k
+        ((usage.input_tokens + usage.cache_write_tokens) / 1000.0) * tier.input_credits_per_1k
         + (usage.output_tokens / 1000.0) * tier.output_credits_per_1k
     )
     return max(0, math.ceil(cost))

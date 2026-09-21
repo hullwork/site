@@ -154,9 +154,11 @@ def _validate_object(instance: dict, schema: dict, path: str, errors: list[Valid
         for name in required:
             if name not in instance:
                 errors.append(ValidationError(f"{path}.{name}", "is required"))
-    if schema.get("additionalProperties") is False and isinstance(properties, dict):
+    # No "properties" with additionalProperties: false means no key is allowed.
+    declared = properties if isinstance(properties, dict) else {}
+    if schema.get("additionalProperties") is False:
         for name in instance:
-            if name not in properties:
+            if name not in declared:
                 errors.append(ValidationError(f"{path}.{name}", "is not a declared property"))
 
 

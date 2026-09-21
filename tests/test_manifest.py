@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 
 from sites import manifest
+from sites import manifest as manifest_mod
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -641,3 +642,22 @@ class SchemaFileTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FlowSchemaSubsetTests(unittest.TestCase):
+    """A schema keyword the Broker does not enforce would be ignored at run time."""
+
+    def test_an_unenforced_keyword_is_refused(self) -> None:
+        manifest = _base_manifest()
+        flow = next(iter(manifest["flows"].values()))
+        flow["output_schema"] = {"type": "object", "properties": {"code": {"type": "string", "pattern": "^A"}}}
+        errors = manifest_mod.validate(manifest)
+        self.assertTrue(any("pattern" in e and "output_schema" in e for e in errors), errors)
+
+    def test_the_supported_subset_is_accepted(self) -> None:
+        manifest = _base_manifest()
+        flow = next(iter(manifest["flows"].values()))
+        flow["output_schema"] = {"type": "object", "required": ["summary"],
+                                 "properties": {"summary": {"type": "string", "maxLength": 200}},
+                                 "additionalProperties": False}
+        self.assertEqual(manifest_mod.validate(manifest), [])

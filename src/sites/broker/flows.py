@@ -21,7 +21,7 @@ from typing import Any
 
 from sites.broker import jsonschema_lite
 from sites.broker.http import HttpError, Request, Response, Services
-from sites.broker.ledger import BudgetExceeded, Ledger
+from sites.broker.ledger import BudgetExceeded, Ledger, ReservationInProgress
 from sites.broker.llm import LLMClient, LLMUnavailable, price_credits, resolve_tier
 
 MAX_IDEMPOTENCY_KEY_CHARS = 128
@@ -132,6 +132,9 @@ def handle_run(request: Request, services: Services, llm_client: LLMClient) -> R
         )
     except BudgetExceeded:
         return fallback("budget_exhausted")
+    except ReservationInProgress:
+        raise HttpError(409, "in_progress",
+                        "a call with this idempotency key is still running") from None
 
     if reservation.replayed and reservation.response is not None:
         return Response(200, reservation.response)

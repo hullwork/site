@@ -27,6 +27,24 @@ def stale_after_seconds() -> int:
     return int(getenv("HULL_BROKER_WORKER_STALE_SECONDS", str(default)) or str(default))
 
 
+def reservation_max_age_seconds() -> int:
+    # Provisional: no run is measured to approach an hour (an agent run's caller-tool
+    # waits are bounded by AGENT_CALLER_TOOL_TIMEOUT_SECONDS, 300 by default), and a
+    # hold released while its run is still going lets that run finish uncharged, so
+    # erring long only delays giving back credits a crashed gateway stranded.
+    return int(getenv("HULL_RESERVATION_MAX_AGE_SECONDS", "3600") or "3600")
+
+
+def _release_stale_reservations(db: broker_db.BrokerDatabase) -> int:
+    try:
+        from sites.broker.ledger import Ledger
+    except ModuleNotFoundError as exc:
+        if exc.name != "sites.broker.ledger":
+            raise
+        return 0
+    return Ledger(db, time.time).release_stale(reservation_max_age_seconds())
+
+
 _state_lock = threading.Lock()
 _last_cycle_monotonic: float | None = None
 
@@ -40,7 +58,9 @@ def _run_cycle(db: broker_db.BrokerDatabase) -> None:
         # A rate-limit bucket outlives the window it gates well before this: one
         # day is generous, and nothing reads a bucket once its own window passed.
         buckets = broker_db.delete_expired_rate_limits(cursor, now - timedelta(days=1))
-    telemetry.log("hull_broker_worker_cycle", sessions=sessions, otps=otps, buckets=buckets)
+    reservations = _release_stale_reservations(db)
+    telemetry.log("hull_broker_worker_cycle", sessions=sessions, otps=otps, buckets=buckets,
+                  stale_reservations=reservations)
     with _state_lock:
         _last_cycle_monotonic = time.monotonic()
 

@@ -61,29 +61,29 @@ class AppScopedAccessTests(unittest.TestCase):
     def test_settings_sync_host_and_workload_lookup_tables(self) -> None:
         with self.db.transaction() as cursor:
             broker_db.put_settings(cursor, self.app_env_id, {
-                "hosts": ["one.example.test", "two.example.test"],
-                "workloads": [{"namespace": "ns-a", "serviceAccount": "sa-a"}],
+                "hosts": [f"{self.app_env_id[:8]}-one.example.test", f"{self.app_env_id[:8]}-two.example.test"],
+                "workloads": [{"namespace": f"ns-{self.app_env_id[:12]}", "serviceAccount": "sa-a"}],
             })
         with self.db.transaction() as cursor:
             self.assertEqual(
-                broker_db.app_env_id_for_host(cursor, "one.example.test"), self.app_env_id
+                broker_db.app_env_id_for_host(cursor, f"{self.app_env_id[:8]}-one.example.test"), self.app_env_id
             )
             self.assertEqual(
-                broker_db.app_env_id_for_host(cursor, "two.example.test"), self.app_env_id
+                broker_db.app_env_id_for_host(cursor, f"{self.app_env_id[:8]}-two.example.test"), self.app_env_id
             )
             self.assertIsNone(broker_db.app_env_id_for_host(cursor, "unknown.example.test"))
             self.assertEqual(
-                broker_db.app_env_id_for_workload(cursor, "ns-a", "sa-a"), self.app_env_id
+                broker_db.app_env_id_for_workload(cursor, f"ns-{self.app_env_id[:12]}", "sa-a"), self.app_env_id
             )
         # Replacing settings drops hosts/workloads that are no longer named.
         with self.db.transaction() as cursor:
-            broker_db.put_settings(cursor, self.app_env_id, {"hosts": ["two.example.test"]})
+            broker_db.put_settings(cursor, self.app_env_id, {"hosts": [f"{self.app_env_id[:8]}-two.example.test"]})
         with self.db.transaction() as cursor:
-            self.assertIsNone(broker_db.app_env_id_for_host(cursor, "one.example.test"))
+            self.assertIsNone(broker_db.app_env_id_for_host(cursor, f"{self.app_env_id[:8]}-one.example.test"))
             self.assertEqual(
-                broker_db.app_env_id_for_host(cursor, "two.example.test"), self.app_env_id
+                broker_db.app_env_id_for_host(cursor, f"{self.app_env_id[:8]}-two.example.test"), self.app_env_id
             )
-            self.assertIsNone(broker_db.app_env_id_for_workload(cursor, "ns-a", "sa-a"))
+            self.assertIsNone(broker_db.app_env_id_for_workload(cursor, f"ns-{self.app_env_id[:12]}", "sa-a"))
 
     def test_secrets_round_trip_ciphertext_bytes(self) -> None:
         with self.db.transaction() as cursor:

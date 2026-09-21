@@ -46,6 +46,7 @@ class _FakeAgentRuntimeHandler(BaseHTTPRequestHandler):
     tool_results: list[dict] = []
     cancels: list[dict] = []
     last_ag_ui_body: dict | None = None
+    ag_ui_status: int = 200
     protocol_version = "HTTP/1.1"
 
     def do_POST(self) -> None:  # noqa: N802
@@ -54,6 +55,12 @@ class _FakeAgentRuntimeHandler(BaseHTTPRequestHandler):
         body = json.loads(raw) if raw else {}
         if self.path == "/api/ag-ui":
             type(self).last_ag_ui_body = body
+            if type(self).ag_ui_status != 200:
+                self.send_response(type(self).ag_ui_status)
+                self.send_header("Content-Length", "0")
+                self.close_connection = True
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.close_connection = True
@@ -134,6 +141,7 @@ class AgentBridgeTests(unittest.TestCase):
         _FakeAgentRuntimeHandler.tool_results = []
         _FakeAgentRuntimeHandler.cancels = []
         _FakeAgentRuntimeHandler.last_ag_ui_body = None
+        _FakeAgentRuntimeHandler.ag_ui_status = 200
         self.addCleanup(os.environ.pop, "HULL_AGENT_RUNTIME_URL", None)
 
     def _request(self, *, name: str = "triage", input_text: str = "hi", thread_id: str | None = None,
@@ -343,6 +351,82 @@ class AgentBridgeTests(unittest.TestCase):
         remaining = [name for name, _ in events_iter]
         self.assertEqual(remaining[-1], "run.finished")
         self.assertEqual(_FakeAgentRuntimeHandler.cancels, [])
+
+    def _reservation_states(self) -> list[tuple[str, int | None]]:
+        with psycopg.connect(_PG_DSN) as connection:
+            return [(r[0], r[1]) for r in connection.execute(
+                "SELECT status, settled_amount FROM broker_credit_reservations ORDER BY created_at").fetchall()]
+
+    def test_a_client_that_disconnects_after_run_started_is_settled_and_cancelled(self) -> None:
+        _FakeAgentRuntimeHandler.script = [{"type": "TEXT_MESSAGE_CONTENT", "delta": "x"},
+                                           {"type": "RUN_FINISHED"}]
+        events = iter(agent_bridge.handle_run(self._request(), self.services).events)
+        self.assertEqual(next(events)[0], "run.started")
+        events.close()  # what the server does when the client goes away
+        self.assertEqual([state for state, _ in self._reservation_states()], ["settled"])
+        self.assertEqual(agent_bridge._ACTIVE_RUNS, {})
+
+    def test_a_disconnect_mid_stream_cancels_the_upstream_run(self) -> None:
+        _FakeAgentRuntimeHandler.script = [{"type": "TEXT_MESSAGE_CONTENT", "delta": "x"},
+                                           {"type": "TEXT_MESSAGE_CONTENT", "delta": "y"},
+                                           {"type": "RUN_FINISHED"}]
+        events = iter(agent_bridge.handle_run(self._request(), self.services).events)
+        next(events)
+        next(events)  # message.delta: the upstream run is open now
+        events.close()
+        self.assertEqual(len(_FakeAgentRuntimeHandler.cancels), 1)
+        self.assertEqual([state for state, _ in self._reservation_states()], ["settled"])
+
+    def test_a_failure_before_streaming_gives_the_hold_back(self) -> None:
+        with mock.patch.object(agent_bridge, "build_tool_list", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                agent_bridge.handle_run(self._request(), self.services)
+        self.assertEqual([state for state, _ in self._reservation_states()], ["released"])
+
+    def test_an_unpriced_tier_is_refused_before_reserving(self) -> None:
+        runtime = AppRuntime(app_env_id="app1", version=1, digest="d", config=CONFIG,
+                             settings={**SETTINGS, "model_tiers": {}})
+        with self.assertRaises(HttpError) as ctx:
+            agent_bridge.handle_run(self._request(runtime=runtime), self.services)
+        self.assertEqual(ctx.exception.code, "model_unavailable")
+        self.assertEqual(self._reservation_states(), [])
+
+    def test_tool_finished_reports_a_failed_caller_tool(self) -> None:
+        _FakeAgentRuntimeHandler.script = [
+            {"type": "TOOL_CALL_START", "toolCallId": "c1", "toolCallName": "entity__tickets__read"},
+            {"type": "CUSTOM", "name": "hull/caller_tool_call",
+             "value": {"requestId": "req1", "toolCallId": "c1", "name": "entity__tickets__read", "arguments": {}}},
+            {"type": "TOOL_CALL_RESULT", "toolCallId": "c1"},
+            {"type": "RUN_FINISHED"},
+        ]
+        with mock.patch.object(agent_bridge.tools_mod, "execute", side_effect=RuntimeError("boom")):
+            events = list(agent_bridge.handle_run(self._request(), self.services).events)
+        finished = [data for name, data in events if name == "tool.finished"]
+        self.assertEqual(finished, [{"callId": "c1", "tool": "entity__tickets__read", "ok": False}])
+
+    def test_upstream_refusals_are_reported_distinctly(self) -> None:
+        for status, code in ((409, "run_in_progress"), (429, "agent_busy"), (500, "upstream_error")):
+            _FakeAgentRuntimeHandler.ag_ui_status = status
+            events = list(agent_bridge.handle_run(self._request(), self.services).events)
+            self.assertEqual(events[-1][0], "run.error")
+            self.assertEqual(events[-1][1]["code"], code, status)
+
+    def test_cancel_reaches_a_run_streaming_through_another_replica(self) -> None:
+        _FakeAgentRuntimeHandler.script = [{"type": "TEXT_MESSAGE_CONTENT", "delta": "x"},
+                                           {"type": "RUN_FINISHED"}]
+        events = iter(agent_bridge.handle_run(self._request(), self.services).events)
+        run_id = next(events)[1]["runId"]
+        saved = agent_bridge._ACTIVE_RUNS.pop(run_id)  # as seen from another replica
+        cancel = Request(
+            method="POST", path=f"/_hull/v1/agents/triage/runs/{run_id}/cancel",
+            params={"name": "triage", "runId": run_id}, query={}, headers={}, body=None,
+            host="app.test", client_ip="127.0.0.1", cookies={},
+            app=AppCaller(app_env_id="app1", site="s"), user=_user(), runtime=None,
+        )
+        self.assertEqual(agent_bridge.handle_cancel(cancel, self.services).status, 202)
+        self.assertEqual(len(_FakeAgentRuntimeHandler.cancels), 1)
+        agent_bridge._ACTIVE_RUNS[run_id] = saved
+        list(events)
 
     def test_build_system_prompt_includes_guardrails(self) -> None:
         prompt = agent_bridge.build_system_prompt(AGENT_CONFIG)

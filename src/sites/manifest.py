@@ -22,6 +22,8 @@ import re
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
+from sites.broker import jsonschema_lite
+
 API_VERSION = "hull/v1alpha1"
 
 # Contract 3.6, verbatim: "Entity/column/table names match ^[a-z_][a-z0-9_]{0,62}$."
@@ -402,12 +404,18 @@ def validate(manifest: dict, *, max_tools_per_agent: int = 10) -> list[str]:
         prompt = flow.get("prompt")
         if not isinstance(prompt, str) or not prompt:
             err(f"{path}/prompt", "must be a non-empty string")
-        input_schema = flow.get("input_schema", {})
-        if not isinstance(input_schema, dict):
-            err(f"{path}/input_schema", "must be an object")
-        output_schema = flow.get("output_schema", {})
-        if not isinstance(output_schema, dict):
-            err(f"{path}/output_schema", "must be an object")
+        for key in ("input_schema", "output_schema"):
+            schema = flow.get(key, {})
+            if not isinstance(schema, dict):
+                err(f"{path}/{key}", "must be an object")
+                continue
+            # The Broker validates flow input and model output with a small
+            # JSON Schema subset; a keyword outside it would be silently ignored,
+            # so a model answer the author meant to reject would pass as valid.
+            unsupported = jsonschema_lite.supported(schema)
+            if unsupported:
+                err(f"{path}/{key}", "uses JSON Schema keywords the Broker does not enforce: "
+                    + ", ".join(unsupported))
         if "fallback" not in flow:
             err(f"{path}/fallback", "must be present; it is what a disabled or over-budget call returns")
         audience = flow.get("audience")
@@ -512,9 +520,9 @@ def canonical_json(obj: Any) -> str:
 
 
 def canonical_digest(compiled: dict) -> str:
-    """`sha256(canonical_json(compiled))`, what `hull plan`/`hull apply` print.
+    """`sha256(canonical_json(compiled))`: a stable fingerprint of the compiled config.
 
-    This is not the Broker's plan digest (contract 3.5 hashes `{"config", "base"}`
+    `hull plan`/`hull apply` print the Broker's plan digest, not this one. This is not the Broker's plan digest (contract 3.5 hashes `{"config", "base"}`
     together, which needs the active version number only the server has); it is the
     digest of the compiled config alone, useful for the CLI to show the caller a stable
     fingerprint of what it is about to send.

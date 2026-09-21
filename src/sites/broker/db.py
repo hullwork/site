@@ -353,8 +353,36 @@ def get_settings(cursor: Any, app_env_id: str) -> dict:
     return {} if row is None else _as_dict(row[0])
 
 
+class SettingConflict(Exception):
+    """A host or workload in the settings already belongs to another app."""
+
+    def __init__(self, kind: str, value: str) -> None:
+        super().__init__(f"{kind} {value!r} belongs to another app")
+        self.kind = kind
+        self.value = value
+
+
 def put_settings(cursor: Any, app_env_id: str, settings: dict) -> None:
     ensure_app(cursor, app_env_id)
+    # Hosts and workloads decide which app a request or a workload is; letting a
+    # later write move one to itself would let any app take over another's domain.
+    # Freeing one requires removing it from the owning app's settings first.
+    for host in settings.get("hosts") or []:
+        cursor.execute("SELECT app_env_id FROM broker_app_hosts WHERE host = %s", (host,))
+        row = cursor.fetchone()
+        if row is not None and row[0] != app_env_id:
+            raise SettingConflict("host", host)
+    for workload in settings.get("workloads") or []:
+        namespace, service_account = workload.get("namespace"), workload.get("serviceAccount")
+        if not namespace or not service_account:
+            continue
+        cursor.execute(
+            "SELECT app_env_id FROM broker_app_workloads WHERE namespace = %s AND service_account = %s",
+            (namespace, service_account),
+        )
+        row = cursor.fetchone()
+        if row is not None and row[0] != app_env_id:
+            raise SettingConflict("workload", f"{namespace}/{service_account}")
     cursor.execute(
         "INSERT INTO broker_app_settings (app_env_id, settings) VALUES (%s, %s) "
         "ON CONFLICT (app_env_id) DO UPDATE SET settings = EXCLUDED.settings, "

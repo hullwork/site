@@ -272,6 +272,13 @@ export function createHull(options: HullOptions = {}) {
         expiresAt: string | number;
       };
       const user: HullUser = { ...body.user, token: body.token };
+      // Entries only matter until their token expires; dropping expired ones on
+      // every write keeps the map to the sessions active within one token lifetime
+      // instead of growing for as long as the process lives.
+      const current = now();
+      for (const [key, entry] of cookieExchangeCache) {
+        if (entry.expiresAt <= current) cookieExchangeCache.delete(key);
+      }
       cookieExchangeCache.set(cacheKey, { user, expiresAt: parseExpiry(body.expiresAt, now) });
       return user;
     },

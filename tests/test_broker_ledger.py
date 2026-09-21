@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 import unittest
 
 import psycopg
@@ -179,6 +180,55 @@ class LedgerTests(unittest.TestCase):
     def test_an_idempotency_key_without_an_owner_is_refused(self) -> None:
         with self.assertRaises(ValueError):
             self.ledger.reserve(app_env_id="app1", scope="flow:x", amount=5, idempotency_key="k")
+
+    def test_a_released_key_is_a_new_call_that_pays_and_is_budget_checked(self) -> None:
+        first = self.ledger.reserve(
+            app_env_id="app1", scope="flow:x", amount=5, idempotency_key="k", idempotency_owner="u1",
+            user_subject=("user", "u1"), user_limit=6,
+        )
+        self.ledger.release(first.id, app_env_id="app1")
+        retry = self.ledger.reserve(
+            app_env_id="app1", scope="flow:x", amount=5, idempotency_key="k", idempotency_owner="u1",
+            user_subject=("user", "u1"), user_limit=6,
+        )
+        self.assertFalse(retry.replayed)
+        self.assertNotEqual(retry.id, first.id)
+        self.ledger.settle(retry.id, app_env_id="app1", actual_amount=5)
+        self.assertEqual(self.ledger.usage("app1", "user", "u1", self.ledger.period_for()), 5)
+        # the budget is real: another release-and-retry cannot exceed the limit
+        second = self.ledger.reserve(
+            app_env_id="app1", scope="flow:x", amount=1, idempotency_key="k2", idempotency_owner="u1",
+            user_subject=("user", "u1"), user_limit=6,
+        )
+        self.ledger.release(second.id, app_env_id="app1")
+        with self.assertRaises(ledger.BudgetExceeded):
+            self.ledger.reserve(
+                app_env_id="app1", scope="flow:x", amount=5, idempotency_key="k2", idempotency_owner="u1",
+                user_subject=("user", "u1"), user_limit=6,
+            )
+
+    def test_a_key_still_running_is_in_progress(self) -> None:
+        self.ledger.reserve(
+            app_env_id="app1", scope="flow:x", amount=5, idempotency_key="k", idempotency_owner="u1",
+            user_subject=("user", "u1"), user_limit=100,
+        )
+        with self.assertRaises(ledger.ReservationInProgress):
+            self.ledger.reserve(
+                app_env_id="app1", scope="flow:x", amount=5, idempotency_key="k", idempotency_owner="u1",
+                user_subject=("user", "u1"), user_limit=100,
+            )
+
+    def test_stale_holds_are_released(self) -> None:
+        held = self.ledger.reserve(app_env_id="app1", scope="agent:a", amount=7,
+                                   user_subject=("user", "u1"), user_limit=100)
+        # created_at is the database's NOW(), so the later clock is wall time.
+        later = ledger.Ledger(self.db, lambda: time.time() + 7200)
+        self.assertEqual(later.release_stale(3600), 1)
+        with psycopg.connect(_PG_DSN) as connection:
+            status = connection.execute("SELECT status FROM broker_credit_reservations WHERE id = %s",
+                                        (held.id,)).fetchone()[0]
+        self.assertEqual(status, "released")
+        self.assertEqual(later.release_stale(3600), 0)
 
     def test_concurrent_reservations_race_for_the_last_credits_exactly_one_wins(self) -> None:
         # Real threads, real PostgreSQL connections (BrokerDatabase opens one

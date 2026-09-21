@@ -212,7 +212,7 @@ class SecretsNeverReturnedTests(_ServerCase):
         responses = [
             self.call("GET", f"/_hull/admin/v1/apps/{self.app_env_id}/config", headers=self.admin()),
             self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
-                       {"hosts": ["secret-scan.test"]}, self.admin()),
+                       {"hosts": [f"{self.app_env_id[:8]}-secret-scan.test"]}, self.admin()),
             self.call("GET", f"/_hull/admin/v1/apps/{self.app_env_id}/mail", headers=self.admin()),
         ]
         for status, _, body in responses:
@@ -223,9 +223,9 @@ class SecretsNeverReturnedTests(_ServerCase):
 class AppConfigTests(_ServerCase):
     def test_app_config_has_a_cache_control_header_and_no_settings_or_secrets(self) -> None:
         self.plan_and_apply()
-        self.reviewer.add("sa-tok", "system:serviceaccount:ns-a:sa-a")
+        self.reviewer.add("sa-tok", f"system:serviceaccount:ns-{self.app_env_id[:12]}:sa-a")
         self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
-                   {"workloads": [{"namespace": "ns-a", "serviceAccount": "sa-a"}]},
+                   {"workloads": [{"namespace": f"ns-{self.app_env_id[:12]}", "serviceAccount": "sa-a"}]},
                    self.admin())
         status, _, token_body = self.call("POST", "/_hull/v1/app-token",
                                            {"serviceAccountToken": "sa-tok"})
@@ -254,22 +254,47 @@ class HostResolutionTests(_ServerCase):
     def test_known_host_resolves_the_app_on_a_sign_in_route(self) -> None:
         self.plan_and_apply()
         self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
-                   {"hosts": ["known-host.test"]}, self.admin())
+                   {"hosts": [f"{self.app_env_id[:8]}-known-host.test"]}, self.admin())
         status, _, body = self.call("POST", "/_hull/auth/email/start", {"email": "a@example.test"},
-                                    {"Host": "known-host.test"})
+                                    {"Host": f"{self.app_env_id[:8]}-known-host.test"})
         self.assertEqual(status, 202)
         self.assertEqual(len(self.mail.sent), 1)
 
     def test_a_known_host_is_not_an_app_token(self) -> None:
         self.plan_and_apply()
         self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
-                   {"hosts": ["known-host.test"]}, self.admin())
+                   {"hosts": [f"{self.app_env_id[:8]}-known-host.test"]}, self.admin())
         for method, path, body in (("GET", "/_hull/v1/app-config", None),
                                    ("POST", "/_hull/v1/flows/any/run", {"input": {}}),
                                    ("GET", "/_hull/v1/usage/me", None)):
-            status, _, resp = self.call(method, path, body, {"Host": "known-host.test"})
+            status, _, resp = self.call(method, path, body, {"Host": f"{self.app_env_id[:8]}-known-host.test"})
             self.assertEqual(status, 401, path)
             self.assertEqual(resp["code"], "app_token_required", path)
+
+
+class HostOwnershipTests(_ServerCase):
+    def test_another_app_cannot_take_over_a_host_or_workload(self) -> None:
+        other = fx.app_env_id()
+        for app in (self.app_env_id, other):
+            self.call("POST", f"/_hull/admin/v1/apps/{app}/config/plan", {"config": _VALID_CONFIG}, self.admin())
+        status, _, _ = self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
+                                 {"hosts": [f"{self.app_env_id[:8]}-owned.test"],
+                                  "workloads": [{"namespace": f"ns-own-{self.app_env_id[:8]}", "serviceAccount": "sa-own"}]},
+                                 self.admin())
+        self.assertEqual(status, 200)
+        status, _, body = self.call("PUT", f"/_hull/admin/v1/apps/{other}/settings",
+                                    {"hosts": [f"{self.app_env_id[:8]}-owned.test"]}, self.admin())
+        self.assertEqual((status, body["code"]), (409, "host_taken"))
+        status, _, body = self.call("PUT", f"/_hull/admin/v1/apps/{other}/settings",
+                                    {"workloads": [{"namespace": f"ns-own-{self.app_env_id[:8]}", "serviceAccount": "sa-own"}]},
+                                    self.admin())
+        self.assertEqual((status, body["code"]), (409, "workload_taken"))
+        self.assertEqual(self.store.by_host(f"{self.app_env_id[:8]}-owned.test"), self.app_env_id)
+        # the owner can still rewrite its own settings, and freeing the host lets another claim it
+        self.assertEqual(self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
+                                   {"hosts": []}, self.admin())[0], 200)
+        self.assertEqual(self.call("PUT", f"/_hull/admin/v1/apps/{other}/settings",
+                                   {"hosts": [f"{self.app_env_id[:8]}-owned.test"]}, self.admin())[0], 200)
 
 
 class ClientAddressTests(unittest.TestCase):
@@ -343,14 +368,14 @@ class UserTokenAuthTests(_ServerCase):
     def _sign_in(self) -> tuple[str, str]:
         self.plan_and_apply()
         self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
-                   {"hosts": ["user-auth.test"]}, self.admin())
+                   {"hosts": [f"{self.app_env_id[:8]}-user-auth.test"]}, self.admin())
         self.call("POST", "/_hull/auth/email/start", {"email": "carol@example.com"},
-                   {"Host": "user-auth.test"})
+                   {"Host": f"{self.app_env_id[:8]}-user-auth.test"})
         import re
         code = re.search(r"code is (\d{6})", self.mail.sent[-1]["body"]).group(1)
         status, headers, body = self.call(
             "POST", "/_hull/auth/email/verify", {"email": "carol@example.com", "code": code},
-            {"Host": "user-auth.test"},
+            {"Host": f"{self.app_env_id[:8]}-user-auth.test"},
         )
         self.assertEqual(status, 200, body)
         set_cookie = headers["Set-Cookie"]
@@ -363,9 +388,9 @@ class UserTokenAuthTests(_ServerCase):
 
     def test_x_hull_user_with_matching_audience_is_accepted(self) -> None:
         user_token, _ = self._sign_in()
-        self.reviewer.add("sa-tok-2", "system:serviceaccount:ns-b:sa-b")
+        self.reviewer.add("sa-tok-2", f"system:serviceaccount:ns-b-{self.app_env_id[:8]}:sa-b")
         self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
-                   {"workloads": [{"namespace": "ns-b", "serviceAccount": "sa-b"}]},
+                   {"workloads": [{"namespace": f"ns-b-{self.app_env_id[:8]}", "serviceAccount": "sa-b"}]},
                    self.admin())
         _, _, app_token_body = self.call("POST", "/_hull/v1/app-token",
                                           {"serviceAccountToken": "sa-tok-2"})
@@ -386,9 +411,9 @@ class UserTokenAuthTests(_ServerCase):
             org=None, role="member", plan="free", env="prod",
         )
         self.plan_and_apply()
-        self.reviewer.add("sa-tok-3", "system:serviceaccount:ns-c:sa-c")
+        self.reviewer.add("sa-tok-3", f"system:serviceaccount:ns-c-{self.app_env_id[:8]}:sa-c")
         self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
-                   {"workloads": [{"namespace": "ns-c", "serviceAccount": "sa-c"}]},
+                   {"workloads": [{"namespace": f"ns-c-{self.app_env_id[:8]}", "serviceAccount": "sa-c"}]},
                    self.admin())
         _, _, app_token_body = self.call("POST", "/_hull/v1/app-token",
                                           {"serviceAccountToken": "sa-tok-3"})

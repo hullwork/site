@@ -139,8 +139,11 @@ gets no token. Tests use a fake reviewer.
 ### 3.4 Runtime API — partition D (handlers), partition C (routing, auth)
 
 All require an app token. `X-Hull-User` is required unless the target runs `run_as: app`.
-Idempotency: `Idempotency-Key` header (≤ 128 chars) on POSTs that spend credits, scoped to the
-calling end user (or `app`): the same key from two users is two requests.
+Idempotency: `Idempotency-Key` header (≤ 128 chars) on flow runs, scoped to the calling end
+user (or `app`): the same key from two users is two requests. A key whose call settled replays
+that response; a key whose call is still running gets `409 in_progress`; a key whose call gave
+its credits back (a fallback before settling) is a new call and passes every budget check.
+Agent runs take no idempotency key: a retry continues the conversation with `threadId`.
 
 | Method, path | Body | Result |
 |---|---|---|
@@ -153,7 +156,12 @@ calling end user (or `app`): the same key from two users is two requests.
 Agent run SSE events (`event: <name>\ndata: <json>\n\n`):
 `run.started {runId, threadId}`, `message.delta {text}`, `tool.started {callId, tool}`,
 `tool.finished {callId, tool, ok}`, `approval.pending {approvalId, tool}`,
-`run.finished {usage: {credits}}`, `run.error {code, message}`.
+`run.finished {usage: {credits}}`, `run.error {code, message}`. `run.error` codes include
+`cancelled`, `budget_exhausted`, `run_in_progress` (the agent runtime already runs this thread),
+`agent_busy` (it is at capacity), `upstream_error`, `internal_error`. An agent whose model tier has
+no pricing is refused with `503 model_unavailable` before any credits are reserved. A client that
+disconnects mid-stream has its run cancelled upstream and settled for what was metered. Cancel
+works from any gateway replica: runs in flight are recorded in the database.
 
 ### 3.5 Admin API — partition C
 
@@ -162,7 +170,7 @@ Agent run SSE events (`event: <name>\ndata: <json>\n\n`):
 | `POST /_hull/admin/v1/apps/{appEnvId}/config/plan` | `{"config": <compiled>}` | `200 {"digest", "activeVersion": int\|null, "changes": [{"path","op"}]}`; invalid → `400 invalid_config {"errors": [...]}` |
 | `POST /_hull/admin/v1/apps/{appEnvId}/config/apply` | `{"config", "planDigest"}` | `200 {"version", "digest"}`; digest mismatch → `409 plan_stale` |
 | `GET /_hull/admin/v1/apps/{appEnvId}/config` | — | `200 {"version","digest","config"}` or `404` |
-| `PUT /_hull/admin/v1/apps/{appEnvId}/settings` | settings object (3.7), merge-replace at top level | `200 {settings without secrets}` |
+| `PUT /_hull/admin/v1/apps/{appEnvId}/settings` | settings object (3.7), merge-replace at top level (a key sent replaces that whole key) | `200 {settings without secrets}`; a host or workload that belongs to another app → `409 host_taken` / `workload_taken` |
 | `PUT /_hull/admin/v1/apps/{appEnvId}/secrets/{name}` | `{"value": str}` | `204`; values are never returned by any endpoint |
 | `POST /_hull/admin/v1/apps/{appEnvId}/dev-app-token` | `{"site"?}` | `200 {"token","expiresAt"}` — only when `HULL_BROKER_DEV_TOKENS=1` |
 | `PUT /_hull/admin/v1/apps/{appEnvId}/users/{userId}/plan` | `{"plan"}` | `200` |
@@ -364,7 +372,11 @@ Request (`POST /api/ag-ui`, trusted-proxy identity only; other identities → `4
   default) → `413`. It must work when the answer lands on another replica (reuse the HITL
   wait: in-process event plus database polling).
 - Timeout `AGENT_CALLER_TOOL_TIMEOUT_SECONDS` (default 300, the existing HITL timeout); on
-  timeout the model receives an error result and the run continues.
+  timeout the model receives an error result and the run continues. A result the caller posts
+  after that is refused and only logged by the Broker, so a tool with side effects can complete
+  after the model was told it failed; keep tool execution well under this timeout.
+- `/respond` (the generic HITL endpoint) refuses caller-tool requests with `409`; they are
+  answered only through `/tool-results`.
 - Usage is already emitted as `CUSTOM` name `agent/event` with `value.type == "usage"` and
   fields `input`, `output`, `cached`, `cache_write`, `model`; D reads that. Cancellation uses
   the existing `POST /api/sessions/{id}/cancel`.
