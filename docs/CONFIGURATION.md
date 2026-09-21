@@ -188,6 +188,34 @@ invalid value generally raises at import time rather than falling back.
 | `SITES_GATEWAY_POD_LABEL_KEY` | `gateway.envoyproxy.io/owning-gateway-name` | Label that identifies this Gateway's data-plane Pods to the tenant NetworkPolicy |
 | `SITES_GATEWAY_POD_LABEL_VALUE` | `SITES_GATEWAY_NAME` | Value for that label |
 
+## Hull Broker (runtime)
+
+The runtime half of the Broker (`src/sites/broker/{ledger,llm,flows,tools,mcp_client,
+entities,agent_bridge,runtime_api}.py` — partition D of the AI SaaS vertical slice,
+`docs/HULL_RUNTIME_CONTRACT.md`) reads its own `HULL_*` variables, separate from the
+core half's (`docs/HULL_RUNTIME_CONTRACT.md` §2-§3 tokens/DB/secrets, owned by
+partition C). Same rule as the table above: read once at process start (or, for the
+LLM client, lazily on first flow call — see below), a change needs a rollout.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `HULL_LLM_BASE_URL` | none (required) | OpenAI-chat-completions-compatible base URL `llm.py`'s `HttpLLMClient` posts `/chat/completions` to. Unset is not a startup failure: `runtime_api.py` resolves the client lazily on the first flow call, and an unset/misconfigured value degrades every flow to its `upstream_error` fallback rather than crashing the gateway — deliberately, since a Broker instance can legitimately serve only apps with `ai_enabled: false` |
+| `HULL_LLM_API_KEY_FILE` | empty | File holding the bearer key sent as `Authorization: Bearer <key>` to `HULL_LLM_BASE_URL`; empty means no `Authorization` header is sent |
+| `HULL_LLM_CONNECT_TIMEOUT_SECONDS` | `5` | Connect-phase timeout for the LLM HTTP client |
+| `HULL_LLM_READ_TIMEOUT_SECONDS` | `30` | Read-phase timeout for the LLM HTTP client; `urllib` only has one combined socket timeout, so the larger of the two connect/read values is what is actually applied |
+| `HULL_AGENT_RUNTIME_URL` | none | Base URL of the `hullwork/agent` deployment `agent_bridge.py` calls for `POST /api/ag-ui`, `.../tool-results`, and `.../cancel` (contract §5). Unset: every agent run still emits `run.started` and then immediately `run.error {code: "upstream_error"}` rather than raising, so `POST /_hull/v1/agents/{name}/runs` always returns its documented `200 text/event-stream` |
+| `HULL_AGENT_PROXY_SECRET_FILE` | empty | File holding the shared secret sent as `X-Agent-Proxy-Secret` on every call to `HULL_AGENT_RUNTIME_URL`; matches the agent side's `AGENT_PROXY_SECRET(_FILE)` (`agent/server/security.py`) |
+| `HULL_TEST_PG_DSN` | unset | Test-only: points partition D's `tests/test_broker_{ledger,entities,tools,flows,agent_bridge,runtime_api}.py` PostgreSQL-backed cases at a throwaway database (every case starts with `DROP SCHEMA public CASCADE`). Same convention as `SITES_TEST_PG_DSN` (`tests/test_tenancy.py`), kept as a separate variable so the two suites can point at different throwaway databases in CI |
+
+A few call-shape bounds are fixed in code rather than made configurable, for the
+same reason as the "Values deliberately fixed in code" section above — they are
+part of the D5/D6 protocol surface, not a tuning knob an operator should widen per
+deployment: the agent caller-tool count cap (`agent_bridge.DEFAULT_CALLER_TOOLS_MAX
+= 16`, mirroring the agent side's `AGENT_CALLER_TOOLS_MAX` default), the caller-tool
+result truncation length (`agent_bridge.DEFAULT_CALLER_TOOL_MAX_RESULT_CHARS =
+20000`, mirroring `AGENT_CALLER_TOOL_MAX_RESULT_CHARS`), and the entity-read row cap
+(`entities.DEFAULT_ROW_LIMIT = 50`, `entities.MAX_ROW_LIMIT = 200`).
+
 ## Current cleanup and remaining work
 
 Only canonical `SITES_*` environment variables and
