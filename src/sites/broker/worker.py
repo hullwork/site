@@ -67,7 +67,9 @@ class _HealthHandler(BaseHTTPRequestHandler):
 
 def serve() -> None:
     db = broker_db.BrokerDatabase.from_env()
-    broker_db.migrate(db)
+    from sites.broker import schema
+
+    schema.migrate_all(db)
     stop = threading.Event()
 
     def loop() -> None:

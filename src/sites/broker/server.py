@@ -206,9 +206,9 @@ def build_handler(router: Router, services: Services) -> type[BaseHTTPRequestHan
                     raise HttpError(401, "invalid_admin_token",
                                      "the admin token is missing or does not match")
                 return request
-            request.app = self._resolve_app(request)
+            request.app = self._resolve_app(request, allow_host=(mode == "site"))
             request.runtime = services.config.active(request.app.app_env_id)
-            if mode == "app":
+            if mode in ("site", "app"):
                 return request
             user_token = request.headers.get("X-Hull-User")
             if mode == "app+user" and not user_token:
@@ -224,7 +224,7 @@ def build_handler(router: Router, services: Services) -> type[BaseHTTPRequestHan
                                      "the X-Hull-User token does not verify") from exc
             return request
 
-        def _resolve_app(self, request: Request) -> identity.AppCaller:
+        def _resolve_app(self, request: Request, *, allow_host: bool) -> identity.AppCaller:
             token = _bearer_token(request.headers)
             if token:
                 try:
@@ -239,6 +239,8 @@ def build_handler(router: Router, services: Services) -> type[BaseHTTPRequestHan
                         raise HttpError(403, "host_mismatch",
                                          "X-Hull-Host does not belong to this app token")
                 return app
+            if not allow_host:
+                raise HttpError(401, "app_token_required", "this route requires an app token")
             app_env_id = services.config.by_host(request.host)
             if app_env_id is None:
                 raise HttpError(404, "unknown_app", "no app is configured for this host")

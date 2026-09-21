@@ -240,22 +240,35 @@ class AppConfigTests(_ServerCase):
 
 
 class HostResolutionTests(_ServerCase):
-    def test_unknown_host_is_404(self) -> None:
-        status, _, body = self.call(
-            "GET", "/_hull/v1/app-config", headers={"Host": "nobody-owns-this.test"}
-        )
+    """Only the sign-in routes resolve the app from the Host header; everything else
+    needs the app token, so browser code on the app domain cannot go around the app
+    backend (contract section 3.4: all runtime routes require an app token)."""
+
+    def test_unknown_host_is_404_on_a_sign_in_route(self) -> None:
+        status, _, body = self.call("POST", "/_hull/auth/email/start", {"email": "a@example.test"},
+                                    {"Host": "nobody-owns-this.test"})
         self.assertEqual(status, 404)
         self.assertEqual(body["code"], "unknown_app")
 
-    def test_known_host_resolves_the_app(self) -> None:
+    def test_known_host_resolves_the_app_on_a_sign_in_route(self) -> None:
         self.plan_and_apply()
         self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
                    {"hosts": ["known-host.test"]}, self.admin())
-        status, _, body = self.call(
-            "GET", "/_hull/v1/app-config", headers={"Host": "known-host.test"}
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(body["default_role"], "member")
+        status, _, body = self.call("POST", "/_hull/auth/email/start", {"email": "a@example.test"},
+                                    {"Host": "known-host.test"})
+        self.assertEqual(status, 202)
+        self.assertEqual(len(self.mail.sent), 1)
+
+    def test_a_known_host_is_not_an_app_token(self) -> None:
+        self.plan_and_apply()
+        self.call("PUT", f"/_hull/admin/v1/apps/{self.app_env_id}/settings",
+                   {"hosts": ["known-host.test"]}, self.admin())
+        for method, path, body in (("GET", "/_hull/v1/app-config", None),
+                                   ("POST", "/_hull/v1/flows/any/run", {"input": {}}),
+                                   ("GET", "/_hull/v1/usage/me", None)):
+            status, _, resp = self.call(method, path, body, {"Host": "known-host.test"})
+            self.assertEqual(status, 401, path)
+            self.assertEqual(resp["code"], "app_token_required", path)
 
 
 class UserTokenAuthTests(_ServerCase):

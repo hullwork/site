@@ -10,7 +10,10 @@ entity's compiled config (contract §3.6), never from the caller's request body.
 """
 from __future__ import annotations
 
+import datetime
+import decimal
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -120,4 +123,16 @@ def read(
                 rows = cursor.fetchall()
     except psycopg.Error as exc:
         raise EntityError("entity read failed") from exc
-    return [dict(zip(columns, row)) for row in rows]
+    return [{name: _json_value(value) for name, value in zip(columns, row)} for row in rows]
+
+
+def _json_value(value: Any) -> Any:
+    """Rows go to a model and to the app as JSON, and app tables routinely use uuid,
+    timestamptz and numeric columns that the json module cannot encode."""
+    if isinstance(value, (uuid.UUID, decimal.Decimal)):
+        return str(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, (bytes, memoryview)):
+        return bytes(value).hex()
+    return value

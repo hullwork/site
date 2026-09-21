@@ -254,6 +254,11 @@ def _handle_caller_tool_call(
         result = tools_mod.execute(services, gate_ctx, ref, capability, arguments)
     except (mcp_client.NotConnected, mcp_client.MCPUnavailable) as exc:
         result = mcp_client.ToolCallResult(content=str(exc), is_error=True)
+    except Exception as exc:
+        # The agent runtime is blocked waiting for this answer; without one it would
+        # sit until its caller-tool timeout. Report the failure as the tool result.
+        telemetry.log_exception("broker_agent_tool_failed", exc, tool=wire_name)
+        result = mcp_client.ToolCallResult(content="the tool failed.", is_error=True)
 
     content = tools_mod.wrap_untrusted(result.content)
     if len(content) > DEFAULT_CALLER_TOOL_MAX_RESULT_CHARS:
@@ -349,6 +354,12 @@ def _drive_run(
         yield ("run.error", {"code": "upstream_error", "message": "the agent run ended without a result."})
     except AgentRuntimeUnavailable:
         yield ("run.error", {"code": "upstream_error", "message": "the agent runtime could not be reached."})
+    except Exception as exc:
+        # The response is already a 200 event stream, so an unexpected failure can
+        # only be reported in-band; the upstream run is cancelled so it stops spending.
+        telemetry.log_exception("broker_agent_run_failed", exc, run_id=run_id)
+        _cancel_upstream(base_url, headers, thread_id, run_id)
+        yield ("run.error", {"code": "internal_error", "message": "the agent run failed."})
     finally:
         _ACTIVE_RUNS.pop(run_id, None)
         # Idempotent: whichever branch above already settled (or none did), this

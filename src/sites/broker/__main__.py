@@ -11,6 +11,7 @@ from sites.broker import config_store
 from sites.broker import db as broker_db
 from sites.broker import identity
 from sites.broker import mailer as broker_mailer
+from sites.broker import schema
 from sites.broker import secretbox
 from sites.broker import server as broker_server
 from sites.broker import tokens as broker_tokens
@@ -40,7 +41,7 @@ def _build_services() -> Services:
     # Safe at every gateway start (not just the worker's own migrate cycle):
     # migrate() takes a transaction-scoped advisory lock, so N replicas racing
     # here serialize instead of double-applying a step.
-    broker_db.migrate(db)
+    schema.migrate_all(db)
     keys = broker_tokens.KeyRing.from_env()
     secret_key = secretbox.key_from_env()
     config = config_store.ConfigStore(db, secret_key)

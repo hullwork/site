@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import psycopg
@@ -209,6 +210,31 @@ class AgentBridgeTests(unittest.TestCase):
         self.assertFalse(result["isError"])
         self.assertIn("only ticket", result["content"])
         self.assertIn("<untrusted_tool_result>", result["content"])
+
+    def test_a_failing_tool_is_reported_to_the_runtime_instead_of_left_waiting(self) -> None:
+        _FakeAgentRuntimeHandler.script = [
+            {"type": "TOOL_CALL_START", "toolCallId": "c1", "toolCallName": "entity__tickets__read"},
+            {"type": "CUSTOM", "name": "hull/caller_tool_call",
+             "value": {"requestId": "req1", "toolCallId": "c1", "name": "entity__tickets__read", "arguments": {}}},
+            {"type": "RUN_FINISHED"},
+        ]
+        with mock.patch.object(agent_bridge.tools_mod, "execute", side_effect=RuntimeError("boom")):
+            events = list(agent_bridge.handle_run(self._request(), self.services).events)
+        self.assertEqual(len(_FakeAgentRuntimeHandler.tool_results), 1)
+        self.assertTrue(_FakeAgentRuntimeHandler.tool_results[0]["isError"])
+        self.assertNotIn("boom", _FakeAgentRuntimeHandler.tool_results[0]["content"])
+        self.assertEqual(events[-1][0], "run.finished")
+
+    def test_an_unexpected_failure_mid_stream_ends_with_run_error_and_cancels(self) -> None:
+        _FakeAgentRuntimeHandler.script = [
+            {"type": "CUSTOM", "name": "hull/caller_tool_call",
+             "value": {"requestId": "req1", "toolCallId": "c1", "name": "entity__tickets__read", "arguments": {}}},
+            {"type": "RUN_FINISHED"},
+        ]
+        with mock.patch.object(agent_bridge, "_handle_caller_tool_call", side_effect=RuntimeError("boom")):
+            events = list(agent_bridge.handle_run(self._request(), self.services).events)
+        self.assertEqual(events[-1], ("run.error", {"code": "internal_error", "message": "the agent run failed."}))
+        self.assertEqual(len(_FakeAgentRuntimeHandler.cancels), 1)
 
     def test_destructive_tool_call_yields_approval_pending(self) -> None:
         _FakeAgentRuntimeHandler.script = [

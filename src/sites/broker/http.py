@@ -12,7 +12,11 @@ from typing import Any, Callable, Iterator, Mapping
 from sites.broker.config_store import AppRuntime, ConfigStore
 from sites.broker.identity import AppCaller, EndUser
 
-AUTH_MODES = frozenset({"none", "app", "app+user", "app+optional_user", "admin"})
+# "site" is for the browser-facing sign-in routes on the app's own domain: the app is
+# taken from the Host header (or from an app token plus X-Hull-Host when the app backend
+# relays). Every "app*" mode requires the app token itself, so browser code on the app
+# domain cannot call flows, agents or tools around the app backend's own checks.
+AUTH_MODES = frozenset({"none", "site", "app", "app+user", "app+optional_user", "admin"})
 
 
 @dataclass

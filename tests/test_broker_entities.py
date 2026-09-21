@@ -8,6 +8,7 @@ convention this module shares.
 """
 from __future__ import annotations
 
+import json
 import os
 import unittest
 
@@ -152,6 +153,26 @@ class EntityReadRlsTests(unittest.TestCase):
                 cursor.execute("SELECT id, title, owner_id FROM tickets ORDER BY id")
                 rows = cursor.fetchall()
         self.assertEqual(rows, [])
+
+    def test_rows_with_uuid_time_and_numeric_columns_are_json_encodable(self) -> None:
+        # Real app tables use these types (the example app's tickets use a uuid key);
+        # rows that json cannot encode used to abort the agent run mid-stream.
+        with psycopg.connect(_PG_DSN, autocommit=True) as connection:
+            connection.execute(
+                "CREATE TABLE typed (id uuid PRIMARY KEY DEFAULT gen_random_uuid(),"
+                " at timestamptz NOT NULL DEFAULT now(), amount numeric NOT NULL,"
+                " raw bytea NOT NULL, owner_id text NOT NULL)"
+            )
+            connection.execute("GRANT SELECT ON typed TO " + self.ROLE)
+            connection.execute("INSERT INTO typed (amount, raw, owner_id) VALUES (12.50, 'ab', 'userA')")
+        entity = entities.EntityRead.compile(
+            "typed", {"table": "typed", "primary_key": "id",
+                      "columns": ["id", "at", "amount", "raw", "owner_id"]}
+        )
+        rows = entities.read(dsn=self.role_dsn, entity=entity, user_id="userA", org_id=None, role="member")
+        encoded = json.loads(json.dumps(rows))
+        self.assertEqual(encoded[0]["amount"], "12.50")
+        self.assertEqual(len(encoded[0]["id"]), 36)
 
 
 if __name__ == "__main__":

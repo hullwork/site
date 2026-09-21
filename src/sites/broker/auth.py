@@ -340,8 +340,8 @@ def register(router: Router, services: Services) -> None:
     def jwks(request: Request) -> Response:
         return Response(200, services.keys.jwks())
 
-    router.add("POST", "/_hull/auth/email/start", start, auth="app")
-    router.add("POST", "/_hull/auth/email/verify", verify, auth="app")
-    router.add("POST", "/_hull/auth/token", token, auth="app")
-    router.add("POST", "/_hull/auth/logout", logout, auth="app")
+    router.add("POST", "/_hull/auth/email/start", start, auth="site")
+    router.add("POST", "/_hull/auth/email/verify", verify, auth="site")
+    router.add("POST", "/_hull/auth/token", token, auth="site")
+    router.add("POST", "/_hull/auth/logout", logout, auth="site")
     router.add("GET", "/_hull/.well-known/jwks.json", jwks, auth="none")
