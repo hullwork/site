@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 from tests import chart
 
+from sites import exposure
 from sites.k8s_resources import deployment_resource
 from sites.validation import ValidationError, normalize_deploy_payload
 from sites.kube import ApiError
@@ -734,6 +735,152 @@ class OrphanScaledObjectTests(unittest.TestCase):
         from sites.k8s_resources import scaled_object_path
 
         self.assertIn(scaled_object_path(spec, namespace), kube.deleted)
+
+
+@contextmanager
+def using_hull_broker(enabled: bool | None):
+    """Temporarily set (or unset, when None) SITES_HULL_BROKER_ENABLED."""
+    previous = os.environ.get("SITES_HULL_BROKER_ENABLED")
+    if enabled is None:
+        os.environ.pop("SITES_HULL_BROKER_ENABLED", None)
+    else:
+        os.environ["SITES_HULL_BROKER_ENABLED"] = "1" if enabled else "0"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("SITES_HULL_BROKER_ENABLED", None)
+        else:
+            os.environ["SITES_HULL_BROKER_ENABLED"] = previous
+
+
+class HullBrokerServiceAccountLifecycleTests(unittest.TestCase):
+    """B1: the per-CR ServiceAccount, applied and cleaned up alongside everything else."""
+
+    def _spec(self, **extra):
+        with using_backend("gateway"):
+            return normalize_deploy_payload(payload(**extra), DEFAULT_MERCHANT_ID, "local")
+
+    def _sa_path(self, spec, namespace: str) -> str:
+        from sites.naming import cr_name_for
+
+        name = cr_name_for(spec["merchantID"], spec["userID"], spec["serviceName"])
+        return f"/api/v1/namespaces/{namespace}/serviceaccounts/{name}"
+
+    def test_apply_creates_the_service_account_when_enabled(self) -> None:
+        spec = self._spec()
+        kube = _RecordingKube()
+        with using_backend("gateway"), using_hull_broker(True):
+            Operator(kube)._apply_workload(spec, "ns-a")
+        self.assertIn(self._sa_path(spec, "ns-a"), kube.written)
+
+    def test_apply_never_touches_the_service_account_when_disabled(self) -> None:
+        spec = self._spec()
+        kube = _RecordingKube()
+        with using_backend("gateway"), using_hull_broker(None):
+            Operator(kube)._apply_workload(spec, "ns-a")
+        self.assertEqual(
+            [p for p in kube.written if "/serviceaccounts/" in p], []
+        )
+
+    def test_cleanup_always_attempts_deletion_even_when_disabled(self) -> None:
+        """A site deleted after the Broker was switched off must not leak its SA."""
+        spec = self._spec()
+        cr = {
+            "metadata": {
+                "name": "local-local-demo-abcdef0123456789",
+                "deletionTimestamp": "2026-08-27T00:00:00Z",
+                "finalizers": [FINALIZER],
+            },
+            "spec": spec,
+        }
+        from sites.naming import namespace_for_tenant
+
+        namespace = namespace_for_tenant(spec["merchantID"], spec["userID"])
+        kube = _RecordingKube()
+        with using_hull_broker(None):
+            Operator(kube)._cleanup(cr)
+        expected = (
+            f"/api/v1/namespaces/{namespace}/serviceaccounts/"
+            f"{cr['metadata']['name']}"
+        )
+        self.assertIn(expected, kube.deleted)
+
+    def test_cleanup_tolerates_a_service_account_that_never_existed(self) -> None:
+        spec = self._spec()
+        cr = {
+            "metadata": {
+                "name": "local-local-demo-abcdef0123456789",
+                "deletionTimestamp": "2026-08-27T00:00:00Z",
+                "finalizers": [FINALIZER],
+            },
+            "spec": spec,
+        }
+        kube = _RecordingKube(delete_error=ApiError(404, "not found"))
+        with using_hull_broker(True):
+            Operator(kube)._cleanup(cr)  # must not raise
+
+
+class HullBrokerGrantTests(unittest.TestCase):
+    """B4: the ReferenceGrant the /_hull/ HTTPRoute rules need, maintained like the activator's."""
+
+    def operator(self, items):
+        return ReferenceGrantTests().operator(items)
+
+    def item(self, *, namespace="ns-a", exposure_kind="public", stz=False):
+        return ReferenceGrantTests().item(
+            stz=stz, namespace=namespace, exposure_kind=exposure_kind
+        )
+
+    def test_grant_lists_every_public_namespace_regardless_of_scale_to_zero(self) -> None:
+        """Unlike the activator grant, this one is not limited to STZ sites."""
+        op, kube = self.operator(
+            [
+                self.item(namespace="ns-a", stz=False),
+                self.item(namespace="ns-b", stz=True),
+                self.item(namespace="ns-internal", exposure_kind="internal"),
+            ]
+        )
+        with using_backend("gateway"), using_hull_broker(True):
+            op._reconcile_hull_broker_grant()
+        self.assertEqual(len(kube.writes), 1)
+        grant = kube.writes[0][1]
+        froms = sorted(entry["namespace"] for entry in grant["spec"]["from"])
+        self.assertEqual(froms, ["ns-a", "ns-b"])
+
+    def test_grant_pins_the_broker_service_name(self) -> None:
+        op, kube = self.operator([self.item()])
+        with using_backend("gateway"), using_hull_broker(True):
+            op._reconcile_hull_broker_grant()
+        to = kube.writes[0][1]["spec"]["to"][0]
+        self.assertEqual(to["name"], exposure.HULL_BROKER_GATEWAY_NAME)
+        self.assertEqual(to["kind"], "Service")
+
+    def test_grant_is_removed_when_nobody_is_public(self) -> None:
+        op, kube = self.operator([self.item(exposure_kind="internal")])
+        with using_backend("gateway"), using_hull_broker(True):
+            op._reconcile_hull_broker_grant()
+        self.assertEqual(kube.writes, [])
+        self.assertEqual(len(kube.deletes), 1)
+
+    def test_nothing_happens_when_the_broker_is_disabled(self) -> None:
+        op, kube = self.operator([self.item()])
+        with using_backend("gateway"), using_hull_broker(False):
+            op._reconcile_hull_broker_grant()
+        self.assertEqual((kube.writes, kube.deletes), ([], []))
+
+    def test_nothing_happens_on_a_backend_without_l7(self) -> None:
+        op, kube = self.operator([self.item()])
+        with using_backend("nodeport"), using_hull_broker(True):
+            op._reconcile_hull_broker_grant()
+        self.assertEqual((kube.writes, kube.deletes), ([], []))
+
+    def test_missing_crd_is_not_an_error(self) -> None:
+        op, kube = self.operator([self.item()])
+        kube.crd_missing = True
+        with using_backend("gateway"), using_hull_broker(True):
+            op._reconcile_hull_broker_grant()  # Don't throw
+        self.assertEqual(kube.writes, [])
 
 
 class RealClusterRegressionTests(unittest.TestCase):

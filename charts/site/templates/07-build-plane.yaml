@@ -358,8 +358,11 @@ spec:
             matchLabels:
               app.kubernetes.io/name: sites-operator
         # The "Build and Mirror" page of the management console should list /v2/_catalog and the tags of each repo.
-        # sites-api only performs read-only queries and does not push or delete - but the registry has no authentication, so releasing it is equivalent to giving away
-        # It has all the capabilities, so what is put here is "one more required caller", not to release the network segment.
+        # sites-api only performs read-only queries and does not push or delete, but this port (5002) requires Basic
+        # Auth throughout (see the proxy config above) and sites-api already holds those credentials -- the same
+        # SITES_REGISTRY_USERNAME/SITES_REGISTRY_PASSWORD_FILE the builder uses (10-control-plane.yaml). What is put
+        # here is therefore "one more required caller" for an identity that already has full read/write/delete
+        # capability through its credential, not a network segment being opened onto an unauthenticated surface.
         # This symptom is missing: the registry pod is healthy, the service is available, and curl is available from its own container.
         # Only the sites-api connection times out (not refused - the packet was lost by netpol), and the health page displays
         # "Registry unreachable" while the cluster appears to be fine.

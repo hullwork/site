@@ -2588,6 +2588,119 @@ class ServiceNameOwnershipTests(unittest.TestCase):
         self.assertEqual(len(kube.deleted), 1)
 
 
+class ExpectedRevisionTests(unittest.TestCase):
+    """B6: POST /v1/deployments' optimistic-concurrency precondition.
+
+    A precondition on the write, not desired state (CONTRACT.md section 6): it
+    never reaches DEPLOY_FIELDS or the CR spec, so DeployContractTests' three-
+    place pin (tests/test_interface.py) is untouched by this key existing.
+    """
+
+    SERVICE_TOKEN = "s" * 32
+
+    def setUp(self) -> None:
+        self.responses: list[tuple[int, dict]] = []
+
+    def _handler(self, kube: FakeApiKube) -> Handler:
+        handler = object.__new__(Handler)
+        handler.headers = {"X-Sites-Service-Token": self.SERVICE_TOKEN}
+        handler.service_token = self.SERVICE_TOKEN
+        handler.proxy_token = ""
+        handler.kube = kube
+        handler.store = _RecordingStore()
+        handler.mutation_lock = threading.Lock()
+        handler.path = "/v1/deployments"
+        handler._json = lambda status, payload: self.responses.append(
+            (status, payload)
+        )
+        return handler
+
+    @staticmethod
+    def _existing_cr(revision: str) -> dict:
+        return {
+            "metadata": {
+                "name": cr_name_for(DEFAULT_MERCHANT_ID, DEFAULT_USER_ID, "web"),
+            },
+            "spec": {
+                "merchantID": DEFAULT_MERCHANT_ID,
+                "userID": DEFAULT_USER_ID,
+                "serviceName": "web",
+                "revision": revision,
+            },
+        }
+
+    def test_absent_is_todays_behaviour(self) -> None:
+        kube = FakeApiKube(deployments=[self._existing_cr("R1")])
+        handler = self._handler(kube)
+        handler._read_body = lambda *_a, **_k: {"name": "web", "image": "nginx:1"}
+        handler.do_POST()
+        self.assertEqual(self.responses[-1][0], 202)
+
+    def test_matching_revision_is_accepted(self) -> None:
+        kube = FakeApiKube(deployments=[self._existing_cr("R1")])
+        handler = self._handler(kube)
+        handler._read_body = lambda *_a, **_k: {
+            "name": "web",
+            "image": "nginx:1",
+            "expectedRevision": "R1",
+        }
+        handler.do_POST()
+        self.assertEqual(self.responses[-1][0], 202)
+
+    def test_stale_revision_is_a_409_and_writes_nothing(self) -> None:
+        kube = FakeApiKube(deployments=[self._existing_cr("R1")])
+        handler = self._handler(kube)
+        handler._read_body = lambda *_a, **_k: {
+            "name": "web",
+            "image": "nginx:1",
+            "expectedRevision": "R0-stale",
+        }
+        handler.do_POST()
+        status, payload = self.responses[-1]
+        self.assertEqual(status, 409)
+        self.assertEqual(payload["code"], "revision_conflict")
+        self.assertEqual(kube.patched, [])
+        self.assertEqual(handler.store.upserts, [])
+
+    def test_expecting_a_revision_that_does_not_exist_yet_is_a_conflict(self) -> None:
+        """No current CR: there is nothing for the caller's belief to match."""
+        kube = FakeApiKube(deployments=[])
+        handler = self._handler(kube)
+        handler._read_body = lambda *_a, **_k: {
+            "name": "web",
+            "image": "nginx:1",
+            "expectedRevision": "R1",
+        }
+        handler.do_POST()
+        status, payload = self.responses[-1]
+        self.assertEqual(status, 409)
+        self.assertEqual(payload["code"], "revision_conflict")
+
+    def test_non_string_expected_revision_is_rejected(self) -> None:
+        kube = FakeApiKube(deployments=[self._existing_cr("R1")])
+        handler = self._handler(kube)
+        handler._read_body = lambda *_a, **_k: {
+            "name": "web",
+            "image": "nginx:1",
+            "expectedRevision": 1,
+        }
+        handler.do_POST()
+        status, _payload = self.responses[-1]
+        self.assertEqual(status, 400)
+
+    def test_expected_revision_never_reaches_the_cr_spec(self) -> None:
+        kube = FakeApiKube(deployments=[self._existing_cr("R1")])
+        handler = self._handler(kube)
+        handler._read_body = lambda *_a, **_k: {
+            "name": "web",
+            "image": "nginx:1",
+            "expectedRevision": "R1",
+        }
+        handler.do_POST()
+        written = next(body for _path, body in kube.patched if "spec" in body)
+        self.assertNotIn("expectedRevision", written["spec"])
+
+
 class AdminConsoleContractTests(unittest.TestCase):
     """The management response must match the field name actually read by the console.
 

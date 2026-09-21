@@ -107,9 +107,61 @@ existingSecrets:
     name: sites-oss-auth
     accessKeyIdKey: access-key-id
     accessKeySecretKey: access-key-secret
+  # Hull Broker wiring (control plane). Only read when broker.enabled is true.
+  # Same "this chart never creates credential material" policy as the four
+  # blocks above -- create these Secrets yourself before setting broker.enabled.
+  hullBroker:
+    signingKeys:
+      name: hull-broker-signing-keys
+      key: signing-keys.json
+    secretBox:
+      name: hull-broker-secret-box
+      key: secret-box-key
+    adminToken:
+      name: hull-broker-admin-token
+      key: token
+    database:
+      name: hull-broker-db-auth
+      passwordKey: password
 
 buildPlane:
   enabled: true
+
+# Hull Broker: the per-app runtime that CONTRACT.md sections 3 and 6 describe.
+# Off by default. Enabling it requires the four existingSecrets.hullBroker
+# Secrets above to already exist; this chart never generates them.
+broker:
+  enabled: false
+  gateway:
+    replicas: 1
+  # Conservatively single-replica; see 13-hull-broker.yaml's comment on the
+  # worker Deployment for why, unlike gateway and ingest, this is not yet
+  # documented as safe to scale out.
+  worker:
+    replicas: 1
+  ingest:
+    replicas: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  # The Broker's own database, independent of the control-plane `database.*`
+  # block above: CONTRACT.md section 4 gives it its own migration ledger
+  # (component "core"/"runtime") and env prefix (HULL_BROKER_DB_*), so it may be
+  # a separate database or even a separate server. Password only ever comes
+  # from existingSecrets.hullBroker.database.
+  database:
+    host: sites-postgres
+    port: 5432
+    name: hull_broker
+    user: hull_broker
+    # Rendered as HULL_BROKER_DB_SSLMODE only when set: BrokerDatabase.from_env()
+    # keeps its own code default (see docs/CONFIGURATION.md), the same choice
+    # database.sslmode above makes for SITES_DB_SSLMODE.
+    sslmode: ""
 
 gateway:
   enabled: false

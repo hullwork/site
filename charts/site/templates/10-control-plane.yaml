@@ -170,6 +170,20 @@ rules:
       - create
       - patch
       - delete
+  # The per-SiteDeployment Hull Broker identity (Kubernetes wiring, k8s_resources.
+  # hull_service_account_resource): created only when SITES_HULL_BROKER_ENABLED=1,
+  # always attempted at cleanup so a site deleted after the Broker was switched
+  # off does not leave one behind. No RoleBinding follows it -- see that
+  # function's docstring for why no RBAC on the identity itself is the point.
+  - apiGroups:
+      - ""
+    resources:
+      - serviceaccounts
+    verbs:
+      - get
+      - create
+      - patch
+      - delete
   # The site content directly delivered from source code falls into the workload Namespace in the form of ConfigMap.
   # Reconciled and recycled by the operator along with SiteDeployment.
   - apiGroups:
@@ -654,6 +668,16 @@ spec:
             # exact provider CIDRs, for example "10.20.0.0/24,10.20.1.0/24".
             - name: SITES_STATIC_ARTIFACT_EGRESS_CIDRS
               value: ""
+            # Hull Broker wiring (control plane, see docs/CONFIGURATION.md). Off
+            # by default with broker.enabled, matching the Deployments in
+            # 13-hull-broker.yaml: a workload should not receive a ServiceAccount,
+            # token, or HULL_BROKER_URL for a Broker this release never installed.
+            - name: SITES_HULL_BROKER_ENABLED
+              value: {{ .Values.broker.enabled | quote }}
+            {{- if .Values.broker.enabled }}
+            - name: SITES_HULL_BROKER_URL
+              value: {{ printf "http://hull-broker-gateway.%s.svc:8080" .Values.namespaces.control | quote }}
+            {{- end }}
             - name: SITES_LOG_FORMAT
               value: json
           # startupProbe catches a cold start: the operator is up until the first sweep completes

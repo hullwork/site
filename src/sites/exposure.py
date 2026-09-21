@@ -146,6 +146,41 @@ GATEWAY_POD_LABEL_VALUE = (
 )
 
 
+# --- Hull Broker wiring (control plane) ---
+# See CONTRACT.md section 6 and docs/CONFIGURATION.md "Hull Broker wiring (control
+# plane)". Off by default: the chart's broker.* Deployments also default to disabled,
+# and a workload must not receive Broker connectivity metadata for a Broker that was
+# never installed.
+HULL_BROKER_ENABLED_ENV = "SITES_HULL_BROKER_ENABLED"
+# Service name and port of the Broker gateway, as created by
+# charts/site/templates/13-hull-broker.yaml. Env-overridable for parity with
+# ACTIVATOR_SERVICE/ACTIVATOR_PORT above, but the chart itself creates a Service
+# named literally "hull-broker-gateway" on this port -- overriding one without the
+# other is the same foot-gun those two already document.
+HULL_BROKER_GATEWAY_NAME = (
+    getenv("SITES_HULL_BROKER_SERVICE", "hull-broker-gateway")
+    or "hull-broker-gateway"
+)
+HULL_BROKER_GATEWAY_PORT = int(getenv("SITES_HULL_BROKER_PORT", "8080") or "8080")
+
+
+def hull_broker_enabled() -> bool:
+    """Whether tenant workloads and gateway routes wire up to the Hull Broker.
+
+    Same "explicit boolean or refuse" contract as ``SITES_MCP_ENDPOINT_ENABLED``
+    (see api_mcp.endpoint_enabled_from_env): a value that is neither true nor false
+    stops the process rather than silently picking a side.
+    """
+    raw = (getenv(HULL_BROKER_ENABLED_ENV, "") or "").strip().lower()
+    if not raw:
+        return False
+    if raw in {"true", "1", "yes", "on"}:
+        return True
+    if raw not in {"false", "0", "no", "off"}:
+        raise RuntimeError(f"{HULL_BROKER_ENABLED_ENV} must be true or false")
+    return False
+
+
 def tenant_digest(*parts: str) -> str:
     """Stable digest of several normalized identity segments, 16 hex characters.
 
@@ -311,6 +346,43 @@ class GatewayExposure(ExposureBackend):
             }
         else:
             backend_ref = {"name": service_name, "port": int(spec["port"])}
+        rules: list[dict[str, Any]] = []
+        if hull_broker_enabled():
+            # The Broker owns end-user auth and app identity (CONTRACT.md section
+            # 3), and these three paths must resolve to it even for a scaled-to-zero
+            # site: sign-in and agent discovery cannot depend on first waking the
+            # tenant's own Deployment. Listed before the catch-all "/" rule below so
+            # a reader sees the more specific match first, though Gateway API
+            # itself orders by specificity regardless of list position.
+            hull_backend_ref = {
+                "name": HULL_BROKER_GATEWAY_NAME,
+                "namespace": CONTROL_NAMESPACE,
+                "port": HULL_BROKER_GATEWAY_PORT,
+            }
+            rules.extend(
+                {
+                    "matches": [{"path": {"type": path_type, "value": path_value}}],
+                    "backendRefs": [hull_backend_ref],
+                }
+                for path_type, path_value in (
+                    ("PathPrefix", "/_hull/"),
+                    ("Exact", "/.well-known/agent-card.json"),
+                    ("Exact", "/.well-known/oauth-protected-resource"),
+                )
+            )
+        rules.append(
+            {
+                "matches": [{"path": {"type": "PathPrefix", "value": "/"}}],
+                "backendRefs": [backend_ref],
+                # Only STZ routes relax request timeouts: they have to accommodate a cold start,
+                # Resident routers should not learn to wait (what should be fast should fail quickly).
+                **(
+                    {"timeouts": {"request": STZ_ROUTE_TIMEOUT}}
+                    if spec.get("scaleToZero")
+                    else {}
+                ),
+            }
+        )
         return [
             {
                 "apiVersion": "gateway.networking.k8s.io/v1",
@@ -336,19 +408,7 @@ class GatewayExposure(ExposureBackend):
                         }
                     ],
                     "hostnames": [host],
-                    "rules": [
-                        {
-                            "matches": [{"path": {"type": "PathPrefix", "value": "/"}}],
-                            "backendRefs": [backend_ref],
-                            # Only STZ routes relax request timeouts: they have to accommodate a cold start,
-                            # Resident routers should not learn to wait (what should be fast should fail quickly).
-                            **(
-                                {"timeouts": {"request": STZ_ROUTE_TIMEOUT}}
-                                if spec.get("scaleToZero")
-                                else {}
-                            ),
-                        }
-                    ],
+                    "rules": rules,
                 },
             }
         ]

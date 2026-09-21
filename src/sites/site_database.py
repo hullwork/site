@@ -18,6 +18,46 @@ from sites import exposure
 from sites.kube import ApiError
 
 
+# Hull Broker wiring (control plane) -- see docs/CONFIGURATION.md. Both are
+# GitOps-only per-role PostgreSQL limits: unset means no limit, the same
+# behaviour as before either existed, so an install that never sets them sees
+# no change. Not tenant input -- these apply to every site role a control plane
+# provisions, the same "cluster-wide toggle, not a DEPLOY_FIELD" shape as the
+# Hull Broker env injection in k8s_resources.py.
+_DB_ROLE_CONNECTION_LIMIT_ENV = "SITES_DB_ROLE_CONNECTION_LIMIT"
+_DB_ROLE_STATEMENT_TIMEOUT_MS_ENV = "SITES_DB_ROLE_STATEMENT_TIMEOUT_MS"
+
+
+def _positive_int_env(name: str) -> int | None:
+    raw = (os.environ.get(name, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise StorageError(f"{name} must be a positive integer") from exc
+    if value <= 0:
+        raise StorageError(f"{name} must be a positive integer")
+    return value
+
+
+def db_role_connection_limit() -> int | None:
+    """``CONNECTION LIMIT`` applied to every site role, or ``None`` for no limit."""
+    return _positive_int_env(_DB_ROLE_CONNECTION_LIMIT_ENV)
+
+
+def db_role_statement_timeout_ms() -> int | None:
+    """Role-level ``statement_timeout`` in milliseconds, or ``None`` for no limit.
+
+    Independent of ``DatabaseConfig.statement_timeout`` (SITES_DB_STATEMENT_TIMEOUT
+    / SITES_DATA_DB_STATEMENT_TIMEOUT): those bound one control-plane connection: this
+    is a role-level default (``ALTER ROLE ... SET``) that applies to every future
+    session under a site's runtime/reader role, including ones NL2SQL or the
+    site's own application code opens directly.
+    """
+    return _positive_int_env(_DB_ROLE_STATEMENT_TIMEOUT_MS_ENV)
+
+
 def _identity_digest(merchant_id: str, user_id: str, site_name: str) -> str:
     identity = "\0".join((merchant_id, user_id, site_name)).encode("utf-8")
     return hashlib.sha256(identity).hexdigest()[:32]
@@ -153,20 +193,41 @@ class SiteDatabaseProvisioner:
 
     @staticmethod
     def _ensure_role(cursor: Any, role: str, password: str) -> None:
+        connection_limit = db_role_connection_limit()
+        statement_timeout_ms = db_role_statement_timeout_ms()
         cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
         if cursor.fetchone() is None:
+            create = sql.SQL(
+                "CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
+                "NOCREATEROLE NOREPLICATION NOINHERIT"
+            ).format(sql.Identifier(role), sql.Literal(password))
+            if connection_limit is not None:
+                create = sql.SQL("{} CONNECTION LIMIT {}").format(
+                    create, sql.Literal(connection_limit)
+                )
+            cursor.execute(create)
+        else:
             cursor.execute(
-                sql.SQL(
-                    "CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB "
-                    "NOCREATEROLE NOREPLICATION NOINHERIT"
-                ).format(sql.Identifier(role), sql.Literal(password))
+                sql.SQL("ALTER ROLE {} PASSWORD {}").format(
+                    sql.Identifier(role), sql.Literal(password)
+                )
             )
-            return
-        cursor.execute(
-            sql.SQL("ALTER ROLE {} PASSWORD {}").format(
-                sql.Identifier(role), sql.Literal(password)
+            # Re-provisioning: unlike CONNECTION LIMIT above (bound at CREATE),
+            # ALTER ROLE ... CONNECTION LIMIT applies the same setting to an
+            # already-existing role, so a limit added after first provisioning
+            # still reaches roles created before it.
+            if connection_limit is not None:
+                cursor.execute(
+                    sql.SQL("ALTER ROLE {} CONNECTION LIMIT {}").format(
+                        sql.Identifier(role), sql.Literal(connection_limit)
+                    )
+                )
+        if statement_timeout_ms is not None:
+            cursor.execute(
+                sql.SQL("ALTER ROLE {} SET statement_timeout = {}").format(
+                    sql.Identifier(role), sql.Literal(statement_timeout_ms)
+                )
             )
-        )
 
 
 def site_data_config_from_env() -> DatabaseConfig:

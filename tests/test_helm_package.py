@@ -246,11 +246,17 @@ class HelmPackageContractTests(unittest.TestCase):
         values = yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
         secrets = values["existingSecrets"]
         self.assertEqual(
-            {"api", "database", "registry", "objectStorage"}, set(secrets)
+            {"api", "database", "registry", "objectStorage", "hullBroker"},
+            set(secrets),
         )
         self.assertEqual("console-session-key", secrets["api"]["consoleSessionKey"])
         self.assertEqual("htpasswd", secrets["registry"]["htpasswdKey"])
         self.assertEqual("password", secrets["database"]["passwordKey"])
+        # broker.enabled defaults to false, so 13-hull-broker.yaml renders
+        # nothing by default and hullBroker's Secret references are dormant
+        # values, not yet proven not to leak by the render assertions below.
+        # See HullBrokerChartTests for the broker.enabled=true render.
+        self.assertEqual("password", secrets["hullBroker"]["database"]["passwordKey"])
         self.assertNotIn("stringData", (CHART / "values-dev.yaml").read_text())
         self.assertNotIn("data:", (CHART / "values-dev.yaml").read_text())
 
@@ -628,6 +634,170 @@ class HelmPackageContractTests(unittest.TestCase):
         ).stdout
         self.assertIn("SITES_HOST_PORT_BASE", declared)
         self.assertIn('value: "18090"', declared)
+
+
+class HullBrokerChartTests(unittest.TestCase):
+    """B5: broker.enabled=false renders nothing extra; true renders a working set."""
+
+    BROKER_SECRETS = (
+        "--set", "broker.enabled=true",
+    )
+
+    def _render(self, *extra_args: str) -> str:
+        return subprocess.run(
+            ["helm", "template", "site", str(CHART), *POD_CIDR, *extra_args],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+
+    def test_disabled_by_default_and_renders_no_broker_objects(self) -> None:
+        if not shutil.which("helm"):
+            self.skipTest("helm is not installed")
+        rendered = self._render()
+        documents = [item for item in yaml.safe_load_all(rendered) if item]
+        names = {item["metadata"]["name"] for item in documents if "metadata" in item}
+        self.assertFalse(any(name.startswith("hull-broker") for name in names))
+
+    def test_disabled_render_is_identical_to_before_the_broker_template_existed(self) -> None:
+        """The only permitted diff is the two harmless additions this feature
+        makes to *existing* templates (the operator's serviceaccounts RBAC verb
+        and its SITES_HULL_BROKER_ENABLED env line) -- not a new object."""
+        if not shutil.which("helm"):
+            self.skipTest("helm is not installed")
+        rendered = self._render()
+        documents = [item for item in yaml.safe_load_all(rendered) if item]
+        self.assertEqual(len(documents), 36, "object count drifted from the documented baseline")
+
+    def test_enabled_renders_three_deployments_and_the_gateway_service(self) -> None:
+        if not shutil.which("helm"):
+            self.skipTest("helm is not installed")
+        rendered = self._render(*self.BROKER_SECRETS)
+        documents = [item for item in yaml.safe_load_all(rendered) if item]
+        deployments = {
+            item["metadata"]["name"]
+            for item in documents
+            if item.get("kind") == "Deployment"
+            and item["metadata"]["name"].startswith("hull-broker")
+        }
+        self.assertEqual(
+            deployments,
+            {"hull-broker-gateway", "hull-broker-worker", "hull-broker-ingest"},
+        )
+        services = {
+            item["metadata"]["name"]
+            for item in documents
+            if item.get("kind") == "Service"
+            and item["metadata"]["name"].startswith("hull-broker")
+        }
+        self.assertEqual(services, {"hull-broker-gateway"})
+
+    def test_enabled_render_leaks_no_secret_values(self) -> None:
+        if not shutil.which("helm"):
+            self.skipTest("helm is not installed")
+        rendered = self._render(*self.BROKER_SECRETS)
+        documents = [item for item in yaml.safe_load_all(rendered) if item]
+        self.assertNotIn("Secret", {item.get("kind") for item in documents})
+
+    def test_gateway_alone_gets_the_tokenreview_clusterrole(self) -> None:
+        if not shutil.which("helm"):
+            self.skipTest("helm is not installed")
+        rendered = self._render(*self.BROKER_SECRETS)
+        documents = [item for item in yaml.safe_load_all(rendered) if item]
+        cluster_roles = [
+            item
+            for item in documents
+            if item.get("kind") == "ClusterRole"
+            and item["metadata"]["name"] == "hull-broker-gateway"
+        ]
+        self.assertEqual(len(cluster_roles), 1)
+        rules = cluster_roles[0]["rules"]
+        self.assertTrue(
+            any(
+                "tokenreviews" in rule.get("resources", [])
+                and "create" in rule.get("verbs", [])
+                for rule in rules
+            )
+        )
+        bindings = [
+            item
+            for item in documents
+            if item.get("kind") == "ClusterRoleBinding"
+            and item["metadata"]["name"] == "hull-broker-gateway"
+        ]
+        self.assertEqual(len(bindings), 1)
+        subjects = bindings[0]["subjects"]
+        self.assertEqual({s["name"] for s in subjects}, {"hull-broker-gateway"})
+
+    def test_worker_and_ingest_get_no_tokenreview_access(self) -> None:
+        if not shutil.which("helm"):
+            self.skipTest("helm is not installed")
+        rendered = self._render(*self.BROKER_SECRETS)
+        documents = [item for item in yaml.safe_load_all(rendered) if item]
+        role_names = {
+            item["metadata"]["name"]
+            for item in documents
+            if item.get("kind") in {"ClusterRole", "Role"}
+        }
+        self.assertNotIn("hull-broker-worker", role_names)
+        self.assertNotIn("hull-broker-ingest", role_names)
+
+    def test_gateway_network_policy_admits_tenants_and_the_data_plane_only(self) -> None:
+        if not shutil.which("helm"):
+            self.skipTest("helm is not installed")
+        rendered = self._render(*self.BROKER_SECRETS)
+        documents = [item for item in yaml.safe_load_all(rendered) if item]
+        policy = next(
+            item
+            for item in documents
+            if item.get("kind") == "NetworkPolicy"
+            and item["metadata"]["name"] == "hull-broker-gateway"
+        )
+        self.assertEqual(policy["spec"]["policyTypes"], ["Ingress"])
+        sources = [rule["from"][0] for rule in policy["spec"]["ingress"]]
+        managed_tenant = next(
+            s for s in sources
+            if s.get("namespaceSelector", {}).get("matchLabels", {}).get("sites.local/managed") == "true"
+        )
+        self.assertIsNotNone(managed_tenant)
+        data_plane = next(
+            s for s in sources
+            if s.get("namespaceSelector", {}).get("matchLabels", {}).get("kubernetes.io/metadata.name")
+            == "envoy-gateway-system"
+        )
+        self.assertEqual(
+            data_plane["podSelector"]["matchLabels"]["gateway.envoyproxy.io/owning-gateway-name"],
+            "sites-gateway",
+        )
+
+    def test_worker_and_ingest_replicas_default_to_one_and_are_overridable(self) -> None:
+        if not shutil.which("helm"):
+            self.skipTest("helm is not installed")
+        default_rendered = self._render(*self.BROKER_SECRETS)
+        default_documents = [item for item in yaml.safe_load_all(default_rendered) if item]
+        for name in ("hull-broker-gateway", "hull-broker-worker", "hull-broker-ingest"):
+            deployment = next(
+                item for item in default_documents
+                if item.get("kind") == "Deployment" and item["metadata"]["name"] == name
+            )
+            self.assertEqual(deployment["spec"]["replicas"], 1)
+
+        scaled_rendered = self._render(
+            *self.BROKER_SECRETS,
+            "--set", "broker.gateway.replicas=3",
+            "--set", "broker.ingest.replicas=2",
+        )
+        scaled_documents = [item for item in yaml.safe_load_all(scaled_rendered) if item]
+        gateway = next(
+            item for item in scaled_documents
+            if item.get("kind") == "Deployment" and item["metadata"]["name"] == "hull-broker-gateway"
+        )
+        ingest = next(
+            item for item in scaled_documents
+            if item.get("kind") == "Deployment" and item["metadata"]["name"] == "hull-broker-ingest"
+        )
+        self.assertEqual(gateway["spec"]["replicas"], 3)
+        self.assertEqual(ingest["spec"]["replicas"], 2)
 
 
 if __name__ == "__main__":
