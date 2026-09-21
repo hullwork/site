@@ -175,7 +175,7 @@ git clone https://github.com/hullwork/site.git
 cd site
 uv sync --locked --extra dev
 make test-db     # starts a throwaway PostgreSQL on 127.0.0.1:55439
-make test        # 1162 tests
+make test        # 1481 tests
 make test-db-down
 ```
 
@@ -338,6 +338,8 @@ merchants, admin, builds, bundles, deployments, sites, mcp) over the shared HTTP
 | `cli.py`, `mcp.py` | The `sites` command / the MCP tool surface over stdio |
 | `telemetry.py`, `tracing.py`, `monitoring.py`, `grafana_proxy.py` | Structured logs and Prometheus text metrics / optional OTLP-HTTP export / alert-rule definitions / bounded Grafana proxy |
 | `serializers.py`, `registry_client.py`, `scaffolds.py`, `version_policy.py`, `safe_stdout.py`, `shutdown.py`, `topology.py` | Response projections, registry client, curated profiles, version policy, non-blocking stdio proxies, signal handling, topology constants |
+| `manifest.py`, `hullcli.py` | The `hull.yaml` validator/compiler and canonical digest / the `hull` command that plans and applies a compiled manifest against the Broker admin API |
+| `broker/` (package) | The Hull Broker that deployed AI SaaS apps call: sign-in, app identity, config store, credit ledger, flows, tool gate, agent bridge; see `docs/BROKER.md` and `docs/BROKER_RUNTIME.md` |
 
 </details>
 

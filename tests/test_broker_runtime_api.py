@@ -21,6 +21,9 @@ _PG_DSN = os.environ.get("HULL_TEST_PG_DSN", "")
 
 
 class _FakeConfigStore(ConfigStore):
+    def __init__(self) -> None:  # the real store needs a database and a key
+        pass
+
     def active(self, app_env_id: str):
         return None
 

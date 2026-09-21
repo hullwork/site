@@ -86,8 +86,12 @@ def _validate_config(config: Any) -> list[str]:
     validate = getattr(manifest, "validate", None)
     if validate is None:
         return _structural_errors(config)
-    errors = validate(config)
-    return list(errors) if errors else []
+    # The manifest validator judges what an author wrote; defaults such as
+    # default_role are filled in by compile(), so it does not require them. The
+    # Broker stores compiled configs, so the compiled shape is checked as well.
+    errors = list(validate(config) or [])
+    errors.extend(e for e in _structural_errors(config) if e not in errors)
+    return errors
 
 
 def _diff(old: Any, new: Any, prefix: str = "") -> list[dict]:

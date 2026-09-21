@@ -371,6 +371,17 @@ class SseWriterTests(_ServerCase):
 
 
 class RuntimeApiAbsenceTests(_ServerCase):
+    """A build without the runtime module must still serve; simulate that build."""
+
+    def setUp(self) -> None:
+        import sys
+        from unittest import mock
+
+        patcher = mock.patch.dict(sys.modules, {"sites.broker.runtime_api": None})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
     def test_gateway_starts_without_partition_d(self) -> None:
         # build_router() already ran in setUp without raising; this just pins
         # that a D-owned path is simply absent, not a 500.
