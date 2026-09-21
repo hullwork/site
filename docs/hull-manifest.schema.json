@@ -1,0 +1,360 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hullwork.github.io/site/hull-manifest.schema.json",
+  "title": "Hull app manifest",
+  "description": "Structural shape of a Hull manifest (contract section 3.6). Cross-references (an entity permission naming a declared entity, a capability tool reference resolving to a tool that capability lists, the run_as: app + risk: read rule, the public-flow-vs-capabilities rule, and the per-agent tool count limit) are not expressible in JSON Schema and are enforced by sites.manifest.validate instead; this schema only rejects what a schema validator alone can catch.",
+  "type": "object",
+  "required": [
+    "app",
+    "roles",
+    "plans",
+    "agents",
+    "flows"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "hull/v1alpha1"
+    },
+    "app": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "registration": {
+          "type": "string",
+          "enum": [
+            "open",
+            "invite",
+            "domain_allowlist",
+            "closed"
+          ]
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "public",
+            "login_required",
+            "org_members"
+          ]
+        },
+        "organizations": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+      }
+    },
+    "default_role": {
+      "type": "string"
+    },
+    "plans": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      }
+    },
+    "default_plan": {
+      "type": "string"
+    },
+    "entities": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "table",
+          "primary_key",
+          "columns"
+        ],
+        "properties": {
+          "table": {
+            "type": "string",
+            "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+          },
+          "primary_key": {
+            "type": "string",
+            "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+          },
+          "columns": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z_][a-z0-9_]{0,62}$"
+            }
+          }
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "required": [
+            "actions"
+          ],
+          "properties": {
+            "actions": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "read",
+                  "create",
+                  "update",
+                  "delete"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "secrets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]*$"
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "alias",
+          "kind",
+          "url",
+          "tools",
+          "credential",
+          "risk"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "mcp"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https?://"
+          },
+          "tools": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]{0,31}$"
+            }
+          },
+          "credential": {
+            "type": "string",
+            "enum": [
+              "app",
+              "end_user"
+            ]
+          },
+          "risk": {
+            "type": "string",
+            "enum": [
+              "read",
+              "write",
+              "destructive"
+            ]
+          },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "instructions",
+          "model_tier",
+          "tools",
+          "run_as",
+          "budget"
+        ],
+        "properties": {
+          "instructions": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "guardrails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "model_tier": {
+            "type": "string",
+            "minLength": 1
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "run_as": {
+            "type": "string",
+            "enum": [
+              "end_user",
+              "app"
+            ]
+          },
+          "requires_feature": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "budget": {
+            "type": "object",
+            "required": [
+              "max_credits_per_run"
+            ],
+            "properties": {
+              "max_credits_per_run": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "flows": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "mode",
+          "model_tier",
+          "prompt",
+          "fallback",
+          "audience",
+          "budget"
+        ],
+        "properties": {
+          "mode": {
+            "const": "llm"
+          },
+          "model_tier": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "input_schema": {
+            "type": "object"
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "fallback": {},
+          "audience": {
+            "type": "string",
+            "enum": [
+              "server",
+              "public"
+            ]
+          },
+          "requires_feature": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "budget": {
+            "type": "object",
+            "required": [
+              "max_credits_per_call"
+            ],
+            "properties": {
+              "max_credits_per_call": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

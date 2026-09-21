@@ -33,6 +33,7 @@ Source = "https://github.com/hullwork/site"
 
 [project.scripts]
 sites = "sites.cli:main"
+hull = "sites.hullcli:main"
 
 [project.optional-dependencies]
 dev = [
