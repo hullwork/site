@@ -1,5 +1,5 @@
 # Build context is this repository root. No consumer-repository files are used.
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS console
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS console
 WORKDIR /build
 # Keep lockfiles in their own layer: frontend-only source changes need not reinstall dependencies.
 COPY console/package.json console/package-lock.json ./
@@ -7,7 +7,7 @@ RUN npm ci --ignore-scripts
 COPY console/ ./
 RUN npm run build
 
-FROM python:3.14-alpine3.24@sha256:05b2b8b732ecd268fee8727a369f936f022d1321b59befd13c30ede22769dcdc
+FROM python:3.14-alpine3.24@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01
 
 WORKDIR /app
 COPY requirements.lock /tmp/requirements.lock
