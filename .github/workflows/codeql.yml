@@ -41,7 +41,7 @@ jobs:
           - language: javascript-typescript
             rule-prefixes: js/
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Runs before the analysis, so a gate that cannot fail is caught even on
@@ -49,12 +49,12 @@ jobs:
       # with a jq program that did not compile.
       - name: Prove the gate can fail
         run: .github/codeql-gate.sh --self-test
-      - uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           languages: ${{ matrix.language }}
           build-mode: none
       - id: analyze
-        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           upload: never
           upload-database: false
