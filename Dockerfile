@@ -1,5 +1,5 @@
 # Build context is this repository root. No consumer-repository files are used.
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS console
+FROM node:26-alpine@sha256:40cd011b55415bc894e45b02fdd5a5dfde056921b7d23a64c74f80497af48797 AS console
 WORKDIR /build
 # Keep lockfiles in their own layer: frontend-only source changes need not reinstall dependencies.
 COPY console/package.json console/package-lock.json ./
